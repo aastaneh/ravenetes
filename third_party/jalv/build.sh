@@ -35,6 +35,10 @@ meson setup build --prefix "$PREFIX" --buildtype release \
 meson compile -C build
 meson install -C build
 
+# Marker so r7sd can tell this build from a distro 1.8.0 with the same version.
+mkdir -p "$PREFIX/share/r7s-jalv"
+(cd "$HERE/patches" && ls *.patch) > "$PREFIX/share/r7s-jalv/PATCHED"
+
 echo
 echo "Installed: $PREFIX/bin/jalv"
 "$PREFIX/bin/jalv" -V | head -1

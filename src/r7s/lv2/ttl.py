@@ -15,7 +15,7 @@ from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from rdflib import RDF, RDFS, BNode, Graph, Literal, Namespace, URIRef
+from rdflib import RDF, RDFS, Graph, Literal, Namespace, URIRef
 
 from .model import Plugin, Port, PortType, ScalePoint
 

@@ -45,6 +45,7 @@ class Loaded:
     source: str
     base_dir: FsPath  # for resolving relative paths such as `bundle:`
     lines: dict[Path, int] = field(default_factory=dict)
+    raw: dict = field(default_factory=dict)  # the document as written
 
     @property
     def kind(self) -> str:
@@ -148,46 +149,57 @@ def load_text(text: str, source: str, base_dir: FsPath, result: LoadResult) -> N
     for data, lines, start in docs:
         if data is None:
             continue
-        if not isinstance(data, dict):
+        load_document(data, source, base_dir, lines, result, start)
+
+
+def load_document(
+    data, source: str, base_dir: FsPath, lines: dict[Path, int], result: LoadResult,
+    start: int | None = None,
+) -> Loaded | None:
+    """Validate one parsed document into `result`. Returns the Loaded or None."""
+    start = start if start is not None else lines.get(())
+    if not isinstance(data, dict):
+        result.report.add(
+            Diagnostic("error", "a resource must be a YAML mapping", source=source, line=start)
+        )
+        return None
+    kind = data.get("kind")
+    name = (data.get("metadata") or {}).get("name") if isinstance(data.get("metadata"), dict) else None
+    ref = f"{kind}/{name}" if kind and name else kind
+    if kind not in KINDS:
+        msg = (
+            "missing 'kind'"
+            if kind is None
+            else f"unknown kind {kind!r}; expected one of {', '.join(KINDS)}"
+        )
+        result.report.add(
+            Diagnostic(
+                "error", msg, resource=ref, path=("kind",) if kind else (),
+                source=source, line=lines.get(("kind",), start),
+            )
+        )
+        return None
+    try:
+        resource = KINDS[kind].model_validate(data)
+    except ValidationError as e:
+        for err in e.errors():
+            path = _clean_loc(err["loc"])
+            line = None
+            for n in range(len(path), -1, -1):
+                if (line := lines.get(tuple(path[:n]))) is not None:
+                    break
+            msg = _clean_msg(err["msg"])
+            if err["type"] == "extra_forbidden":
+                msg = "unknown field"
+            elif err["type"] == "missing":
+                msg = "required field missing"
             result.report.add(
-                Diagnostic("error", "a resource must be a YAML mapping", source=source, line=start)
+                Diagnostic("error", msg, resource=ref, path=path, source=source, line=line)
             )
-            continue
-        kind = data.get("kind")
-        name = (data.get("metadata") or {}).get("name") if isinstance(data.get("metadata"), dict) else None
-        ref = f"{kind}/{name}" if kind and name else kind
-        if kind not in KINDS:
-            msg = (
-                "missing 'kind'"
-                if kind is None
-                else f"unknown kind {kind!r}; expected one of {', '.join(KINDS)}"
-            )
-            result.report.add(
-                Diagnostic(
-                    "error", msg, resource=ref, path=("kind",) if kind else (),
-                    source=source, line=lines.get(("kind",), start),
-                )
-            )
-            continue
-        try:
-            resource = KINDS[kind].model_validate(data)
-        except ValidationError as e:
-            for err in e.errors():
-                path = _clean_loc(err["loc"])
-                line = None
-                for n in range(len(path), -1, -1):
-                    if (line := lines.get(tuple(path[:n]))) is not None:
-                        break
-                msg = _clean_msg(err["msg"])
-                if err["type"] == "extra_forbidden":
-                    msg = "unknown field"
-                elif err["type"] == "missing":
-                    msg = "required field missing"
-                result.report.add(
-                    Diagnostic("error", msg, resource=ref, path=path, source=source, line=line)
-                )
-            continue
-        result.resources.append(Loaded(resource, source, base_dir, lines))
+        return None
+    loaded = Loaded(resource, source, base_dir, lines, data)
+    result.resources.append(loaded)
+    return loaded
 
 
 def expand_inputs(inputs: Iterable[str], recursive: bool = False) -> list[str]:

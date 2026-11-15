@@ -5,7 +5,8 @@ the MOD/modep graphical patchbay.
 
 ## Status
 
-Design settled (2026-11-15). Phase 1 (schema, validation, plugin discovery) implemented.
+Design settled (2026-11-15). Phases 1 (schema, validation, plugin discovery)
+and 2 (daemon, jalv backend, hardware resolution, reconciler) implemented.
 
 ## Motivation
 
@@ -90,6 +91,34 @@ spec:
 
 Exactly one of `usb` or `pci` is required.
 
+**Endpoint selectors.** One card can expose several PipeWire endpoints. A
+laptop's HDA controller, for example, has Speaker, HDMI1–3, Mic1 and Mic2.
+`capture:` and `playback:` pick one per direction:
+
+```yaml
+spec:
+  pci: "8086:51c8"
+  capture: Mic2           # UCM endpoint name, node nick, or description
+  playback: Speaker
+```
+
+- A direction with exactly one endpoint needs no selector, which covers most
+  USB interfaces.
+- If a direction is ambiguous, its edges stay Unresolved and the reason lists
+  the choices. `apply` warns about it only when some rig uses that side.
+- Two endpoints of one card mean two Devices (e.g. `laptop-mic`,
+  `laptop-speaker`).
+- `r7sctl audio ports -o yaml` prints ready-made Devices with selectors.
+- Selectors match exactly first (case-insensitive), then by unique substring.
+
+**Resolution is PipeWire-only in v1.** r7s matches the PipeWire Device object
+on `device.bus` + `device.vendor.id`/`device.product.id` (+ `device.serial`;
+the bare serial or udev's `Vendor_Model_SERIAL` form both match), then the
+node, then its physical non-monitor ports in `port.id` order. The JACK name
+is `<node.description>:<port.name>`. Under plain jackd, device edges are
+Unresolved, while plugins and plugin-to-plugin edges still work. MIDI
+hardware resolution lands in phase 3.
+
 **Canonical device port names** (r7s maps these to real ports):
 
 | Name | Type | Direction |
@@ -153,7 +182,9 @@ spec:
   which default to the port's range. `r7sd` does the mapping itself through
   its own JACK MIDI client, since jalv has no CC mapping.
 - **Endpoints** are `<plugin-id | device-alias>:<port>` or an inline hardware
-  reference. Plugin ids must not collide with device aliases.
+  reference. Plugin ids must not collide with device aliases. Ids are at
+  most 48 characters, because the JACK client is `r7s-<id>` and JACK caps
+  names at 63.
 - **Port-level edges.** Each port of a stereo plugin is wired explicitly.
 
 ### ActiveRig
@@ -222,10 +253,15 @@ spec:
 
 - **Structure is reconciled continuously.** A crashed plugin gets restarted.
   An r7s-declared connection removed elsewhere (qpwgraph, etc.) is restored.
-- **Parameters are set only on apply** (and on rig switch). Live changes from
-  MIDI CC or native UIs are left in place.
-  - `r7sctl diff` shows parameter drift.
-  - `r7sctl snapshot` exports live values back to YAML.
+- **Parameters follow the spec, not the knob.** r7sd tracks the last value it
+  sent each parameter. It sends a new one only when the desired value
+  changes: an edit in the YAML, a parameter removed (back to the plugin
+  default), or a rig switch. A live tweak from a native UI or MIDI CC
+  therefore persists until the spec changes. A crashed plugin is relaunched
+  with the current spec values.
+  - `r7sctl diff -f` shows what an apply would change (exit 1 if anything).
+  - `r7sctl snapshot RIG` prints the active rig with live values, to write
+    back to YAML.
 
 ### Graph ownership
 
@@ -233,6 +269,44 @@ r7s manages only what it created: its plugin clients and the connections it
 declared. It never removes connections it didn't create, even ones that touch
 r7s ports or referenced devices. That makes it safe on a desktop where a DAW
 or browser is also using the audio stack.
+
+### Daemon and API
+
+- **Process:** `r7sd` runs as a systemd user unit
+  (`packaging/systemd/r7sd.service`). When PipeWire is running it re-execs
+  itself under `pw-jack`, so it and every jalv child use PipeWire's libjack.
+- **API:** JSON over HTTP on `$XDG_RUNTIME_DIR/r7s.sock` (mode 0600):
+
+  | Method and path | Purpose |
+  |---|---|
+  | `GET /v1/status` | Daemon, JACK and backend health |
+  | `GET /v1/events` | Recent events |
+  | `GET /v1/resources[?kind=]` | List stored resources |
+  | `GET /v1/resources/{Kind}/{name}` | One resource, with status |
+  | `POST /v1/apply` | Admit and store (`{documents, dryRun}`) |
+  | `POST /v1/diff` | What an apply would change |
+  | `POST /v1/delete` | Delete (`{refs, dryRun}`) |
+  | `GET /v1/snapshot/{rig}` | The active rig with live values |
+
+  The client sends each document with its source file and a line map, so
+  server-side diagnostics still point at `file:line`. File-relative
+  `bundle:`, `pluginPaths` and `jalvPath` are made absolute client-side.
+- **Admission:** tier 1 runs with strict references against the store merged
+  with the incoming resources, and tier 2 runs on the incoming resources.
+  Hardware problems are warnings, not errors: like a pending pod, the rig
+  waits for the device.
+- **State:** `~/.local/state/r7s/resources/<Kind>/<name>.json`. Each apply that
+  changes a resource's spec bumps its `generation`. Status reports the store
+  revision the reconciler last finished, which is what `apply --wait` waits
+  for.
+- **Reconciler:** one thread owns all side effects. API calls and JACK
+  callbacks only wake it, and it also runs every 2s.
+  - Rig phases: `Ready`, `Progressing`, `Degraded` (crash loop, unresolved
+    edge, missing plugin), and `Inactive`.
+  - Crashed plugins restart with exponential backoff (1s doubling to 30s).
+- **Process safety:** jalv children start under `setpriv --pdeathsig KILL`,
+  so they die with r7sd even on SIGKILL. The signal is tied to the spawning
+  *thread*, so only the reconciler thread spawns and stops plugins.
 
 ## Validation (admission)
 
@@ -302,10 +376,16 @@ r7sctl plugins scaffold <uri> [--id verb]   # YAML stanza, ranges as comments
 r7sctl validate [--live] -f <file|dir|-> [-R]
 
 # Daemon operations (phase 2)
-r7sctl apply|get|describe|diff|delete|snapshot ...
+r7sctl apply -f ... [--dry-run] [--wait]
+r7sctl get [rigs|devices|activerig|config|all] [NAME] [-o yaml|json]
+r7sctl describe rig NAME | device NAME      # live status + events
+r7sctl diff -f ...                          # exit 1 if apply would change things
+r7sctl delete KIND NAME | -f ...            # refused if it would dangle a reference
+r7sctl snapshot RIG                         # active rig with live parameter values
+r7sctl status                               # daemon, JACK, backend health
 
 # Hardware discovery (phases 2–3)
-r7sctl audio ports
+r7sctl audio ports [-o yaml]                # yaml: ready-to-apply Devices
 r7sctl midi devices
 r7sctl midi listen <device>
 r7sctl midi sniff --timeout 30s

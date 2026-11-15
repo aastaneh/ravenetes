@@ -1,0 +1,17 @@
+# Ravenetes daemon as a systemd user service.
+#   cp packaging/systemd/r7sd.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now r7sd
+# ExecStart assumes `pip install --user r7sctl` or `uv tool install`; adjust if
+# r7sd lives elsewhere.
+[Unit]
+Description=Ravenetes (r7s) audio rig daemon
+After=pipewire.service wireplumber.service
+Wants=pipewire.service
+
+[Service]
+ExecStart=%h/.local/bin/r7sd
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

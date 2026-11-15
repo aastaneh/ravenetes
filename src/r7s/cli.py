@@ -282,5 +282,9 @@ def validate(inputs, recursive, live, strict, output, plugin_paths, no_cache) ->
     sys.exit(0 if report.ok else 1)
 
 
+from .cli_ops import register  # noqa: E402
+
+register(main)
+
 if __name__ == "__main__":
     main()

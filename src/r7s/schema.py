@@ -24,7 +24,7 @@ PLUGIN_ID_RE = r"^[a-z0-9]([-_a-z0-9]*[a-z0-9])?$"
 HWID_RE = re.compile(r"^[0-9a-f]{4}:[0-9a-f]{4}$")
 
 Name = Annotated[str, Field(pattern=NAME_RE, max_length=63)]
-PluginId = Annotated[str, Field(pattern=PLUGIN_ID_RE, max_length=63)]
+PluginId = Annotated[str, Field(pattern=PLUGIN_ID_RE, max_length=48)]  # JACK names: "r7s-" + id <= 63
 
 
 class Model(BaseModel):
@@ -120,6 +120,9 @@ class DeviceSpec(Model):
     usb: str | None = None
     pci: str | None = None
     serial: str | None = None
+    # Pick one endpoint when the device has several (e.g. "Speaker", "HDMI1").
+    capture: str | None = None
+    playback: str | None = None
 
     @field_validator("usb", "pci")
     @classmethod
@@ -217,6 +220,7 @@ class ConfigSpec(Model):
     backend: Backend = Backend.auto
     display: Display = Display.auto
     plugin_paths: list[str] | None = Field(default=None, alias="pluginPaths")
+    jalv_path: str | None = Field(default=None, alias="jalvPath")
 
 
 # --- envelope ------------------------------------------------------------
