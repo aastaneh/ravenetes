@@ -92,3 +92,24 @@ Fixed in jalv 1.8.2 by commit `1e63ed5` "Fix port controls":
 matched none of its type branches and silently returned. Patch 0001 backports
 it to 1.8.0. Worth raising with the Debian/Ubuntu maintainers: 26.04 ships
 1.8.0, and 1.8.2 can't be packaged there as-is because it needs lilv ≥ 0.28.
+
+---
+
+## Observation (not filed yet): console frontend with `-s`
+
+Seen with 1.8.0 + our patches, ZamVerb (DPF UI with `ui:showInterface`):
+
+- **Command loop skipped:** while the custom UI is shown, the console never
+  reads stdin. `jalv_frontend_run()` only enters the command loop when
+  `run_custom_ui()` returns false, so `set`, `controls` and `quit` are
+  ignored for the window's lifetime. This may be intended, but it makes
+  `-s` unusable for a host that drives jalv over stdin. A fix would poll
+  stdin inside the custom-UI loop, reusing the command parser.
+- **Close ignored:** asking the window manager to close the window (i3
+  `kill`, i.e. `WM_DELETE_WINDOW`) left the window mapped and jalv running.
+- **Segfault on stop:** SIGTERM then terminated jalv with SIGSEGV (rc -11)
+  instead of a clean shutdown.
+
+These are recorded but not root-caused. Reproduce with
+`jalv -s urn:zamaudio:ZamVerb`, type `controls` (no output), then close the
+window and send SIGTERM.

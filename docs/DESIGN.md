@@ -177,7 +177,7 @@ spec:
     - id: verb
       lv2: "urn:zamaudio:ZamVerb"
       bundle: ./plugins/ZamVerb.lv2         # optional, relative to this file
-      ui: false                             # opt out of the native UI window
+      ui: false                             # reserved: native windows arrive with Carla (v2)
   connections:
     audio:
       - from: scarlett:capture_l
@@ -459,11 +459,14 @@ Every discovery and diagnostic command supports `-o json`.
 
 ## Execution modes
 
-- **Headless** (`display: never`, or no display available): one jalv process
-  per plugin without a UI. mod-host comes later as a single-process headless
-  backend.
-- **Desktop** (`display: always`, or X11/Wayland available): jalv with its
-  GTK UI, so native LV2 UI windows open. Per-plugin `ui: false` opts out.
+- **v1 is headless-only:** one console jalv process per plugin, no plugin
+  windows. `ui: true` on a plugin and `display: always` in Config are
+  accepted but only produce a validation warning; r7s never asks jalv for a
+  UI. `ui` isn't part of an instance's identity, so toggling it never
+  restarts a plugin.
+- **Native windows come with the Carla backend (v2).** Carla hosts every UI
+  type and stays remotely controllable. mod-host, also v2, is the
+  single-process headless alternative.
 - **jalv spike result (2026-11-15).** r7sd drives the console `jalv` over
   stdin: `set SYMBOL VALUE` for live changes, `-c SYM=VAL` for launch values,
   and `quit` to stop. Findings, all verified by measuring the audio output
@@ -481,10 +484,18 @@ Every discovery and diagnostic command supports `-o json`.
     installed to `~/.local/opt/r7s-jalv`. r7sd still never closes a jalv's
     stdin on purpose, and it falls back to SIGKILL on its own child if
     `quit` times out.
-  - **Native UIs stay open.** The GTK frontend can't be controlled, so the
-    desktop mode needs another way to get native windows (e.g. console jalv
-    with `-s`, which this build supports through suil, or a separate UI-only
-    process). This is still to be tested.
+  - **Native UIs: tested, not viable with jalv (2026-11-15).**
+    - **No control:** with `-s`, console jalv shows a window only for UIs
+      declaring `ui:showInterface` (ZAM/DPF yes; LSP's 195 plugins and x42
+      no). While a window is open, it **stops reading stdin**:
+      `run_custom_ui()` replaces the command loop. So no live parameters, no
+      CC mapping and no `quit`. Verified: `set wetdry 10` left ZamVerb's
+      knob at 50.
+    - **Can't close or stop it:** closing the window through the window
+      manager didn't end the UI loop, and SIGTERM then segfaulted (rc -11).
+    - **No GTK route:** the GTK frontend has no stdin commands even in 1.10.
+    - **Decision:** defer native windows to the Carla backend rather than
+      fork jalv's GTK frontend.
 
 ## Observability
 
@@ -716,3 +727,4 @@ offline Pi at a gig.
 | Web UI exposure | `127.0.0.1:7377` by default; LAN only by explicit `ui.listen`; read-only either way |
 | Web UI assets | Vanilla JS + SVG, own layered layout, no CDN (works offline) |
 | Hotplug | Kernel uevents via netlink, plus re-reads at +0.5/2/5s |
+| Native plugin windows | Not in v1; jalv can't show one and stay controllable. Carla backend (v2) |

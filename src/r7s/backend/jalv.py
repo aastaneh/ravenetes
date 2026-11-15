@@ -60,8 +60,9 @@ class JalvInstance:
         args = [exe, "-n", spec.client, "-x"]
         for sym, val in params.items():
             args += ["-c", f"{sym}={_fmt(val)}"]
-        if spec.ui:
-            args.append("-s")
+        # Never "-s": with a native UI shown, console jalv stops reading
+        # stdin (no live parameters, CC or quit) and segfaults on SIGTERM.
+        # Native windows are deferred to the Carla backend (docs/DESIGN.md).
         args.append(spec.uri)
         if (setpriv := shutil.which("setpriv")) is not None:
             # Die with r7sd even if it is SIGKILLed (stdin EOF also does it

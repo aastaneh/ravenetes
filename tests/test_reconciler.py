@@ -287,3 +287,13 @@ def test_start_failure_backs_off(h):
     h.clock.t += 1.1
     h.sync()
     assert h.rig_status()["plugins"]["amp"]["state"] == "Running"
+
+
+def test_ui_flag_never_reaches_the_backend_or_restarts(h):
+    h.put(DEVICE + "---" + BASIC.replace(f"lv2: '{AMP}'", f"lv2: '{AMP}', ui: true"))
+    h.sync()
+    inst = h.backend.latest("amp")
+    assert inst.spec.ui is False
+    h.put(BASIC)  # ui flag removed: same instance, no restart
+    h.sync()
+    assert h.backend.latest("amp") is inst and h.backend.stopped == []

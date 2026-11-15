@@ -198,3 +198,12 @@ def test_local_bundle(tmp_path):
     r = parse(rig(plugins=f"- {{id: amp, lv2: {AMP}, bundle: nowhere.lv2}}"), base_dir=tmp_path)
     world = PluginWorld.load([LV2_DIR], extra_bundles=rig_bundles(r), cache_dir=False)
     assert msgs(validate_environment(r, world))[0].endswith("not found (no manifest.ttl)")
+
+
+def test_native_ui_requests_warn_and_run_headless():
+    text = rig(plugins=f"- {{id: amp, lv2: {AMP}, ui: true}}\n- {{id: b, lv2: {AMP}, ui: false}}")
+    ws = msgs(t1(text), "warning")
+    assert len(ws) == 1 and "native plugin windows aren't supported yet" in ws[0]
+    cfg = "apiVersion: r7s/v1\nkind: Config\nspec: {display: always}\n"
+    assert any("native plugin windows" in m for m in msgs(t1(cfg), "warning"))
+    assert msgs(t1(cfg.replace("always", "auto")), "warning") == []

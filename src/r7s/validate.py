@@ -19,7 +19,7 @@ from .endpoints import EndpointError, parse_device_port, parse_endpoint
 from .loader import Loaded, LoadResult
 from .lv2.model import Plugin, Port
 from .lv2.world import PluginWorld
-from .schema import SUPPORTED_FORMATS, Backend, ParamMapping, Rig, param_initial
+from .schema import SUPPORTED_FORMATS, Backend, Display, ParamMapping, Rig, param_initial
 
 SECTIONS = ("audio", "midi")
 EPS = 1e-6
@@ -75,7 +75,13 @@ def validate_structure(
             out.append(
                 c.diag("warning", "the mod-host backend isn't implemented yet; r7s will use jalv", ("spec", "backend"))
             )
+        if c.resource.spec.display == Display.always:
+            out.append(c.diag("warning", NO_NATIVE_UI, ("spec", "display")))
     return out
+
+
+NO_NATIVE_UI = ("native plugin windows aren't supported yet: jalv can't show one and stay "
+                "controllable, so plugins run headless (planned with the Carla backend)")
 
 
 def _check_rig(r: Loaded, devices: set[str], ref_sev: str) -> list[Diagnostic]:
@@ -91,6 +97,8 @@ def _check_rig(r: Loaded, devices: set[str], ref_sev: str) -> list[Diagnostic]:
         ids[p.id] = i
         if p.id in devices:
             out.append(r.diag("error", f"plugin id {p.id!r} collides with a Device of the same name", (*path, "id")))
+        if p.ui:
+            out.append(r.diag("warning", NO_NATIVE_UI, (*path, "ui")))
         if p.format not in SUPPORTED_FORMATS:
             out.append(
                 r.diag("error", f"{p.format} plugins aren't supported yet; this version hosts LV2 only", (*path, p.format))

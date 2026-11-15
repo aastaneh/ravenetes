@@ -131,7 +131,8 @@ def compute_desired(
             if f is not None:
                 params[sym] = f
                 explicit.add(sym)
-        spec = InstanceSpec(id=p.id, uri=p.lv2, bundle=p.bundle, ui=bool(p.ui))
+        # `ui` is accepted but not acted on in v1, so toggling it never restarts a plugin.
+        spec = InstanceSpec(id=p.id, uri=p.lv2, bundle=p.bundle)
         desired.plugins[p.id] = DesiredPlugin(spec, params, explicit, plugin, cc)
 
     inline_cache: dict[str, DeviceResolution] = {}
