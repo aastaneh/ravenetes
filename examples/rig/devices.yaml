@@ -1,0 +1,14 @@
+# Hardware aliases. IDs come from `lsusb` / `lspci`.
+apiVersion: r7s/v1
+kind: Device
+metadata:
+  name: scarlett
+spec:
+  usb: "1235:8210"          # Focusrite Scarlett 2i2 3rd gen
+---
+apiVersion: r7s/v1
+kind: Device
+metadata:
+  name: midimix
+spec:
+  usb: "09e8:0031"          # Akai MIDImix

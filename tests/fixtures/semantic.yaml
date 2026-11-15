@@ -1,0 +1,49 @@
+apiVersion: r7s/v1
+kind: Rig
+metadata:
+  name: semantic
+spec:
+  plugins:
+    - id: drive
+      lv2: "http://drobilla.net/plugins/mda/Overdrve"
+    - id: verb
+      lv2: "urn:zamaudio:ZamVerb"
+      parameters:
+        wetdry: 150
+        room: 2.5
+        roomz: 1
+        master: true
+        lv2_audio_in_1: 0
+    - id: verb
+      vst3: "/usr/lib/vst3/Foo.vst3"
+    - id: plug
+      vst3: "/usr/lib/vst3/Foo.vst3"
+    - id: a
+      lv2: "http://drobilla.net/plugins/mda/Overdrive"
+      parameters:
+        drive: { value: 0.5, cc: 3, device: midimx, min: -1 }
+    - id: b
+      lv2: "http://drobilla.net/plugins/mda/Overdrive"
+  connections:
+    audio:
+      - from: verb:lv2_audio_out_1
+        to: verb:lv2_audio_out_1
+      - from: scarlett:playback_1
+        to: verb:lv2_audio_in_2
+      - from: verb:nope
+        to: scarlett:midi_playback
+      - from: usb/12:34/capture_1
+        to: verb:lv2_audio_in_1
+      - from: a:left_out
+        to: b:left_in
+      - from: b:left_out
+        to: a:left_in
+      - from: a:left_out
+        to: b:left_in
+      - from: a:left_in
+        to: b:drive
+      - from: scarlet:capture_1
+        to: a:right_in
+    midi:
+      - from: midimix:midi_capture
+        to: verb:lv2_audio_in_1

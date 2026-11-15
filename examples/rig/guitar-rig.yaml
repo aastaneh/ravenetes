@@ -1,0 +1,37 @@
+apiVersion: r7s/v1
+kind: Rig
+metadata:
+  name: guitar-rig
+spec:
+  plugins:
+    - id: drive
+      lv2: "http://drobilla.net/plugins/mda/Overdrive"
+      parameters:
+        drive: { value: 0.6, cc: 16, channel: 1, device: midimix }
+        muffle: 0.2
+        output: 0.5
+    - id: verb
+      lv2: "urn:zamaudio:ZamVerb"
+      ui: false
+      parameters:
+        wetdry: { value: 30, cc: 17, device: midimix, min: 0, max: 60 }
+        room: 2
+  connections:
+    audio:
+      - from: scarlett:capture_1
+        to: drive:left_in
+      - from: drive:left_out
+        to: verb:lv2_audio_in_1
+      - from: drive:right_out
+        to: verb:lv2_audio_in_2
+      - from: verb:lv2_audio_out_1
+        to: scarlett:playback_l
+      - from: verb:lv2_audio_out_2
+        to: scarlett:playback_r
+---
+apiVersion: r7s/v1
+kind: ActiveRig
+metadata:
+  name: current
+spec:
+  rig: guitar-rig

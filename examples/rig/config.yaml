@@ -1,0 +1,9 @@
+apiVersion: r7s/v1
+kind: Config
+spec:
+  backend: auto
+  display: auto
+  pluginPaths:
+    - ~/.lv2
+    - /usr/local/lib/lv2
+    - /usr/lib/lv2

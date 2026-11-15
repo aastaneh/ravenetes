@@ -5,7 +5,7 @@ the MOD/modep graphical patchbay.
 
 ## Status
 
-Design settled (2026-11-15). Phase 1 in progress.
+Design settled (2026-11-15). Phase 1 (schema, validation, plugin discovery) implemented.
 
 ## Motivation
 

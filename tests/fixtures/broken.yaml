@@ -1,0 +1,37 @@
+apiVersion: r7s/v1
+kind: Rig
+metadata:
+  name: broken
+spec:
+  plugins:
+    - id: drive
+      lv2: "http://drobilla.net/plugins/mda/Overdrve"
+    - id: verb
+      lv2: "urn:zamaudio:ZamVerb"
+      parameters:
+        wetdry: 150
+        room: 2.5
+        roomz: 1
+        master: { value: 0, channel: 2 }
+    - id: verb
+      vst3: "/usr/lib/vst3/Foo.vst3"
+    - id: synth
+      clap: x
+      lv2: y
+  connections:
+    audio:
+      - from: verb:lv2_audio_out_1
+        to: verb:lv2_audio_in_1
+      - from: scarlett:playback_1
+        to: verb:lv2_audio_in_2
+      - from: verb:nope
+        to: scarlett:midi_playback
+      - from: usb/12:34/capture_1
+        to: verb:lv2_audio_in_1
+    midi:
+      - from: midimx:midi_capture
+        to: verb:lv2_audio_in_1
+---
+apiVersion: r7s/v1
+kind: Rigg
+metadata: { name: x }
