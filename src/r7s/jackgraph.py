@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import collections
 import logging
 import threading
+import time
 from collections.abc import Callable
 from typing import Protocol
 
@@ -40,6 +42,8 @@ class JackGraph:
         self._jack = jack
         self._on_change = on_change or (lambda: None)
         self._dead = threading.Event()
+        self._xruns: collections.deque[tuple[float, float]] = collections.deque(maxlen=10000)
+        self._rate: int | None = None
         try:
             self.client = jack.Client(name, no_start_server=True)
         except jack.JackOpenError as e:
@@ -52,15 +56,36 @@ class JackGraph:
             self._dead.set()
             self._on_change()
 
+        def xrun(delayed_usecs):
+            # Notification thread, not RT; still no JACK calls allowed here.
+            self._xruns.append((time.time(), float(delayed_usecs)))
+            self._on_change()
+
+        def samplerate(rate):
+            self._rate = int(rate)
+            self._on_change()
+
         self.client.set_port_registration_callback(changed, only_available=False)
         self.client.set_port_connect_callback(changed, only_available=False)
         self.client.set_client_registration_callback(changed)
         self.client.set_shutdown_callback(shutdown)
+        self.client.set_xrun_callback(xrun)
+        self.client.set_samplerate_callback(samplerate)
         self.client.activate()
 
     @property
     def sample_rate(self) -> int:
-        return self.client.samplerate
+        return self._rate or self.client.samplerate
+
+    def cpu_load(self) -> float:
+        return self.client.cpu_load()
+
+    def drain_xruns(self) -> list[tuple[float, float]]:
+        """(epoch time, delay in us) of xruns since the last call."""
+        out = []
+        while self._xruns:
+            out.append(self._xruns.popleft())
+        return out
 
     @property
     def buffer_size(self) -> int:
@@ -108,6 +133,16 @@ class FakeGraph:
         self.edges: set[Edge] = set()
         self.log: list[tuple[str, str, str]] = []
         self.dead = False
+        self.sample_rate = 48000
+        self.load = 12.5
+        self.xruns: list[tuple[float, float]] = []
+
+    def cpu_load(self) -> float:
+        return self.load
+
+    def drain_xruns(self) -> list[tuple[float, float]]:
+        out, self.xruns = self.xruns, []
+        return out
 
     def alive(self) -> bool:
         return not self.dead

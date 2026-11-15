@@ -7,7 +7,8 @@ the MOD/modep graphical patchbay.
 
 Design settled (2026-11-15). Phases 1 (schema, validation, plugin discovery),
 2 (daemon, jalv backend, hardware resolution, reconciler) and 3 (MIDI:
-hardware resolution, CC mapping, discovery tools) implemented.
+hardware resolution, CC mapping, discovery tools) and 4 (event log, xruns,
+`logs`, `system-check`) implemented.
 
 ## Motivation
 
@@ -450,8 +451,8 @@ r7sctl midi listen TARGET [--as alias]      # TARGET: usb/…, alsa/ID, card id,
 r7sctl midi sniff --timeout 30s             # summary of every CC you touched
 
 # Observability (phase 4)
-r7sctl logs [--follow] [--since ...] [--unit plugin/amp] [--priority err]
-r7sctl system-check
+r7sctl logs [-f] [--since ...] [-u plugin/amp] [-p err] [-t xrun] [-o json]
+r7sctl system-check [-o json]
 ```
 
 Every discovery and diagnostic command supports `-o json`.
@@ -487,17 +488,92 @@ Every discovery and diagnostic command supports `-o json`.
 
 ## Observability
 
-A journalctl-style structured event stream. Event types:
+### Events
 
-- **xrun**: timestamp, active rig, DSP load.
-- **plugin**: load/unload, crash/restart, parameter changes.
-- **device**: hotplug/unplug, port registration, sample-rate changes.
-- **midi**: device connect/disconnect, program changes. CC events are opt-in.
-- **reconciler**: apply, validate, diff, errors.
-- **system**: daemon start/stop, rig switch.
+Every event has a type, a CamelCase reason (like a Kubernetes event), an
+object (`plugin/amp`, `device/scarlett`, `connection/amp:out->verb:in`,
+`rig/NAME`, `r7sd`, `jack`), a message, a syslog priority, the rig active at
+the time, and optional fields.
 
-The backend is the systemd journal with structured fields. When r7sd isn't
-running under systemd it falls back to an append-only JSON-lines file.
+| Type | Reasons |
+|---|---|
+| `xrun` | `Xrun`: delay (µs), DSP load, burst count. Xruns within 1.5s of r7s starting or stopping a plugin or re-cabling are marked "during a graph change", because PipeWire reconfiguring its graph often costs a cycle and isn't a sign of overload. |
+| `plugin` | `Started`, `Stopped`, `Crashed`, `StartFailed`, `ParameterSet` (debug), `ParameterFailed` |
+| `connection` | `Connected`, `Restored`, `Disconnected`, `ConnectFailed`, `DisconnectFailed` |
+| `device` | `DeviceConnected`, `DeviceDisconnected` (Device presence, audio or MIDI), `SampleRateChanged` |
+| `midi` | `CcUnmapped` (a mapping can't be routed), `CcValue` (opt-in: `Config.spec.log.midiCC: true`, debug) |
+| `reconciler` | `Applied` (with generation and source file), `Deleted`, `ApplyRejected`, `Error` |
+| `system` | `Started`, `Stopping`, `Stopped`, `RigActivated`, `RigDeactivated`, `JackLost`, `JackConnected`, `BackendProblem`, `LogBackendChanged` |
+
+Priorities:
+
+- **err:** crashes and failed operations.
+- **warning:** xruns, unmapped CCs, device loss, rejected applies.
+- **notice:** applies, deletes, rig switches, device arrival, sample-rate
+  changes, daemon start and stop.
+- **debug:** parameter sets and CC values.
+- **info:** everything else.
+
+Not logged: port registration (too noisy) and Program Change (arrives with
+v2 banks).
+
+### Backends
+
+`Config.spec.log.backend: auto | journal | file` can be switched live.
+
+- **Journal:** `auto` uses the journal whenever `/run/systemd/journal/socket`
+  is writable. Events go to journald's native datagram protocol (no
+  libsystemd binding) as `SYSLOG_IDENTIFIER=r7sd` with `R7S_TYPE`,
+  `R7S_REASON`, `R7S_OBJECT`, `R7S_RIG`, `R7S_TEXT` and `R7S_<FIELD>`.
+  Messages with newlines use the binary-safe encoding. `journalctl --user`
+  reads them back with no group membership, from a user service or a
+  terminal.
+- **File:** `~/.local/state/r7s/events.jsonl` (one JSON object per line,
+  rotated at 10 MB, 3 backups) when there's no journal (minimal Pi images,
+  containers) or when `file` is chosen.
+- **stderr:** events are echoed to stderr for terminal runs. The echo is
+  skipped when stderr *is* the journal (`JOURNAL_STREAM`), so events don't
+  appear twice under systemd.
+
+### `r7sctl logs`
+
+```bash
+r7sctl logs                          # last 50 events
+r7sctl logs -f -n 0                  # only new events
+r7sctl logs --since "5 minutes ago"  # or today, 14:30, "2026-11-15 14:30", @epoch
+r7sctl logs -u plugin                # every plugin; -u plugin/amp, -u connection, -u device/x
+r7sctl logs -p err                   # err and more severe
+r7sctl logs -t xrun --rig guitar-rig
+r7sctl logs -o json                  # JSON lines, same shape as events.jsonl
+```
+
+- **Choosing a backend:** `logs` asks the running daemon which backend it
+  writes to. If the daemon is down, it uses the journal when available,
+  else the file.
+- **Filtering:** the same filters run in Python on both backends, and on the
+  journal they're also passed through as `journalctl` matches. Results
+  match either way.
+- **Follow:** `--follow` on the file backend survives rotation.
+
+### `r7sctl system-check`
+
+One line per check, ✓/!/✗/·, with a fix hint. Exit 1 on any failure.
+
+| Check | What it verifies |
+|---|---|
+| PipeWire | the socket and version |
+| pipewire-jack | `pw-jack` is installed |
+| pw-dump | the hardware inventory works |
+| JACK | a real client connects: sample rate, buffer and latency, DSP load |
+| jalv | found; ≥ 1.8.2 or the patched build (distro 1.8.0 fails) |
+| plugins | count and paths |
+| ALSA sequencer | reachable; ports on cards |
+| sound cards | listed from sysfs |
+| realtime | `RLIMIT_RTPRIO` or rtkit |
+| CPU governor | `performance` recommended |
+| event log | what the running daemon actually writes to |
+| r7sd | version, active rig and its phase, xrun count |
+| systemd unit | installed and enabled |
 
 ## Web UI (phase 5)
 
@@ -557,3 +633,4 @@ running under systemd it falls back to an append-only JSON-lines file.
 | CC input path | ALSA sequencer, not a JACK MIDI client, to stay out of the RT graph |
 | Hardware backend | PipeWire only in v1 (jackd: plugins work, device edges don't) |
 | Endpoint ambiguity | Optional `capture:`/`playback:` selectors on Device |
+| Journal access | journald native socket protocol, no libsystemd binding |

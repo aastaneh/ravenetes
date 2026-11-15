@@ -96,6 +96,9 @@ class Api:
             return 400, {"error": "no resources in request"}
         diags = self._admit(incoming)
         if any(d.severity == "error" for d in diags):
+            n = sum(d.severity == "error" for d in diags)
+            refs = ", ".join(r.ref for r in incoming.resources)
+            self.reconciler.event("reconciler", "ApplyRejected", "r7sd", f"{n} error(s) in {refs}", errors=n)
             return 422, {"diagnostics": _diag_payload(diags)}
         results = []
         dry = bool(body.get("dryRun"))
@@ -105,7 +108,11 @@ class Api:
                 action = "created" if old is None else (
                     "unchanged" if _spec_key(old.manifest) == _spec_key(r.raw) else "configured")
             else:
-                _, action = self.store.put(r.kind, r.name, r.raw, r.source)
+                stored, action = self.store.put(r.kind, r.name, r.raw, r.source)
+                if action != "unchanged":
+                    self.reconciler.event("reconciler", "Applied", f"{r.kind.lower()}/{r.name}",
+                                          f"{action} (generation {stored.generation}) from {r.source}",
+                                          generation=stored.generation, source=r.source)
             results.append({"ref": r.ref, "action": action})
         if not dry:
             self.reconciler.poke()
@@ -132,6 +139,7 @@ class Api:
         if not dry:
             for k in sorted(keys):
                 self.store.delete(*k)
+                self.reconciler.event("reconciler", "Deleted", f"{k[0].lower()}/{k[1]}", "deleted")
             self.reconciler.poke()
         return 200, {"results": [{"ref": f"{k}/{n}", "action": "deleted"} for k, n in sorted(keys)],
                      "dryRun": dry, "revision": self.store.revision}
@@ -163,10 +171,12 @@ class Api:
         if s is None:
             return 404, {"error": f"{k}/{name} not found"}
         d = self._with_status(s)
-        if k == "Rig":
-            # Runtime events all concern the active rig's plugins and edges.
-            d["events"] = [e.to_dict() for e in self.reconciler.events
-                           if e.type in ("plugin", "connection", "reconciler")][-50:]
+        obj = f"{k.lower()}/{name}"
+        d["events"] = [
+            e.to_dict() for e in self.reconciler.events
+            if e.object == obj
+            or (k == "Rig" and e.rig == name and e.type in ("plugin", "connection", "xrun", "midi"))
+        ][-50:]
         return 200, d
 
     def status(self) -> tuple[int, dict]:
@@ -174,8 +184,11 @@ class Api:
         st["starting"] = self.reconciler.reconciled_revision < 0  # no pass finished yet
         st["revision"] = self.store.revision
         st["reconciledRevision"] = self.reconciler.reconciled_revision
+        sinks = self.reconciler.log.sinks
         st["daemon"] = {
             "version": __version__,
+            "log": {"backend": self.reconciler.log.backend,
+                    "file": str(sinks[0].path) if sinks and getattr(sinks[0], "name", "") == "file" else None},
             "pid": os.getpid(),
             "uptime": round(time.time() - self.started, 1),
             "socket": self.socket_path,
@@ -185,7 +198,8 @@ class Api:
         return 200, st
 
     def events(self, since: float = 0.0) -> tuple[int, dict]:
-        return 200, {"events": [e.to_dict() for e in self.reconciler.events if e.time > since]}
+        return 200, {"events": [e.to_dict() for e in self.reconciler.events if e.time > since],
+                     "backend": self.reconciler.log.backend}
 
     def diff(self, body: dict) -> tuple[int, dict]:
         incoming = self._parse(body.get("documents") or [])

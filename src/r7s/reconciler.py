@@ -15,7 +15,6 @@ Policy (docs/DESIGN.md):
 
 from __future__ import annotations
 
-import collections
 import logging
 import threading
 import time
@@ -29,13 +28,15 @@ from .hw.pipewire import PipeWireError
 from .jackgraph import Edge, Graph, GraphError
 from .loader import LoadResult
 from .lv2.world import PluginWorld
+from .eventlog import EventLog
 from .store import Store
 
 log = logging.getLogger(__name__)
 
 BACKOFF_START = 1.0
 BACKOFF_MAX = 30.0
-HW_REFRESH = 10.0  # seconds; also refreshed on any JACK graph change
+HW_REFRESH = 10.0
+XRUN_CHANGE_WINDOW = 1.5  # seconds after a structural change  # seconds; also refreshed on any JACK graph change
 EPS = 1e-9
 
 
@@ -58,19 +59,6 @@ class CrashRecord:
     tail: list[str] = field(default_factory=list)
 
 
-@dataclass
-class Event:
-    time: float
-    type: str  # plugin | connection | device | reconciler | system
-    reason: str
-    object: str
-    message: str
-    count: int = 1
-
-    def to_dict(self) -> dict:
-        return self.__dict__.copy()
-
-
 class Reconciler:
     def __init__(
         self,
@@ -82,6 +70,8 @@ class Reconciler:
         clock: Callable[[], float] = time.monotonic,
         backend_key: Callable[[LoadResult], object] = lambda r: None,
         make_cc_router: Callable[[Callable[[str, str, float], None]], object] | None = None,
+        eventlog: EventLog | None = None,
+        make_sink: Callable[[str], object] | None = None,
     ):
         self.store = store
         self._make_backend = make_backend
@@ -112,23 +102,32 @@ class Reconciler:
         self.owned: set[Edge] = set()
         self.desired: Desired | None = None
         self.status: dict = {}
-        self.events: collections.deque[Event] = collections.deque(maxlen=500)
+        self.log = eventlog or EventLog()
+        self.log._rig = lambda: self.desired.rig if self.desired else None
         self.passes = 0
+        self.xruns_total = 0
+        self.rig_xruns: dict[str, int] = {}
+        self.cpu_load: float | None = None
+        self._sample_rate: int | None = None
+        self._device_present: dict[str, bool] = {}
+        self._last_rig: str | None = None
+        self._last_change = -1e9  # clock() of the last plugin start/stop or re-cable
+        self.log_cc_values = False  # Config spec.log.midiCC
+        self._make_sink = make_sink
+        self._log_backend: str | None = None
         self.cc_router = make_cc_router(self.apply_cc) if make_cc_router else None
         self.cc_problems: list[str] = []
         self.reconciled_revision = -1  # store revision the last finished pass saw
 
     # --- events ------------------------------------------------------------
 
-    def event(self, type_: str, reason: str, obj: str, message: str) -> None:
-        with self.lock:
-            last = self.events[-1] if self.events else None
-            if last and (last.type, last.reason, last.object, last.message) == (type_, reason, obj, message):
-                last.count += 1
-                last.time = time.time()
-                return
-            self.events.append(Event(time.time(), type_, reason, obj, message))
-        log.info("%s %s %s: %s", type_, reason, obj, message)
+    @property
+    def events(self):
+        """Recent events, newest last (consecutive duplicates folded)."""
+        return self.log.recent
+
+    def event(self, type_: str, reason: str, obj: str, message: str, **fields) -> None:
+        self.log.emit(type_, reason, obj, message, **fields)
 
     # --- loop --------------------------------------------------------------
 
@@ -228,6 +227,7 @@ class Reconciler:
             self._backend_cfg = cfg
             for problem in self.backend.problems():
                 self.event("system", "BackendProblem", self.backend.name, problem)
+        self._apply_log_config(resources)
         if self.world is None or self._world_rev != self.store.revision:
             self.world = self._make_world(resources)
             self._world_rev = self.store.revision
@@ -240,7 +240,10 @@ class Reconciler:
         ports = graph.ports()
         gens = {s.name: s.generation for s in self.store.list("Rig")}
         desired = compute_desired(resources, self.world, self.hw, self.hw_error, set(ports), gens)
+        self._note_rig_change(desired)
         self.desired = desired
+        self._note_devices(desired)
+        self._note_audio_engine(graph)
 
         # 1. notice instances that died on their own
         for pid, m in list(self.managed.items()):
@@ -286,6 +289,7 @@ class Reconciler:
                 self.event("plugin", "StartFailed", f"plugin/{pid}", str(e))
                 continue
             self.managed[pid] = Managed(want.spec, inst, dict(want.params), dict(want.params), now)
+            self._last_change = now
             self.event("plugin", "Started", f"plugin/{pid}", f"{want.spec.uri} (pid {inst.pid})")
 
         # 4. parameters
@@ -320,18 +324,19 @@ class Reconciler:
             try:
                 graph.connect(*edge)
             except GraphError as err:
-                self.event("connection", "ConnectFailed", f"{e.raw_from} -> {e.raw_to}", str(err))
+                self.event("connection", "ConnectFailed", f"connection/{e.raw_from}->{e.raw_to}", str(err))
                 continue
             reason = "Restored" if edge in self.owned else "Connected"
+            self._last_change = self.clock()
             self.owned.add(edge)
-            self.event("connection", reason, f"{e.raw_from} -> {e.raw_to}", f"{edge[0]} -> {edge[1]}")
+            self.event("connection", reason, f"connection/{e.raw_from}->{e.raw_to}", f"{edge[0]} -> {edge[1]}")
         for edge in list(self.owned - want_edges):
             if edge in present:
                 try:
                     graph.disconnect(*edge)
-                    self.event("connection", "Disconnected", f"{edge[0]} -> {edge[1]}", "no longer declared")
+                    self.event("connection", "Disconnected", f"connection/{edge[0]}->{edge[1]}", "no longer declared")
                 except GraphError as err:
-                    self.event("connection", "DisconnectFailed", f"{edge[0]} -> {edge[1]}", str(err))
+                    self.event("connection", "DisconnectFailed", f"connection/{edge[0]}->{edge[1]}", str(err))
                     continue
             self.owned.discard(edge)
 
@@ -351,6 +356,7 @@ class Reconciler:
         if m is None:
             return
         m.instance.stop()
+        self._last_change = self.clock()
         prefix = m.spec.client + ":"
         self.owned = {e for e in self.owned if not (e[0].startswith(prefix) or e[1].startswith(prefix))}
         self.event("plugin", "Stopped", f"plugin/{pid}", why)
@@ -412,6 +418,7 @@ class Reconciler:
                 or any(c["state"] == "Unresolved" for c in conns) or desired.errors else "Progressing")
             rigs[desired.rig].update(
                 phase=phase, active=True, observedGeneration=desired.generation,
+                xruns=self.rig_xruns.get(desired.rig, 0),
                 plugins=plugins, connections=conns, errors=list(desired.errors),
             )
         status = {
@@ -423,6 +430,9 @@ class Reconciler:
             "rigs": rigs,
             "devices": devices,
             "ownedConnections": len(self.owned),
+            "xruns": self.xruns_total,
+            "cpuLoad": self.cpu_load,
+            "log": self.log.backend,
             "midi": self._midi_status(),
             "passes": self.passes,
             "revision": revision,
@@ -436,6 +446,99 @@ class Reconciler:
             self.status = status
             self.reconciled_revision = revision
 
+    def _apply_log_config(self, resources: LoadResult) -> None:
+        cfgs = resources.of_kind("Config")
+        spec = cfgs[0].resource.spec.log if cfgs else None
+        self.log_cc_values = bool(spec and spec.midi_cc)
+        want = spec.backend if spec else "auto"
+        if self._make_sink is None:
+            return
+        if self._log_backend is None:
+            self._log_backend = want  # the daemon opened the sink for this setting
+            return
+        if want != self._log_backend:
+            old = self.log.backend
+            sink = self._make_sink(want)
+            with self.log._lock:
+                for s in self.log.sinks:
+                    s.close()
+                self.log.sinks = [sink]
+            self._log_backend = want
+            self.event("system", "LogBackendChanged", "r7sd", f"event log: {old} -> {sink.name}")
+
+    # --- observations that only produce events -------------------------------
+
+    def _note_rig_change(self, desired: Desired) -> None:
+        if desired.rig != self._last_rig:
+            if desired.rig:
+                self.event("system", "RigActivated", f"rig/{desired.rig}",
+                           f"active rig is now {desired.rig}" + (f" (was {self._last_rig})" if self._last_rig else ""))
+            else:
+                self.event("system", "RigDeactivated", f"rig/{self._last_rig}", "no active rig")
+            self._last_rig = desired.rig
+
+    def _note_devices(self, desired: Desired) -> None:
+        for name, res in desired.devices.items():
+            was = self._device_present.get(name)
+            if was is None:
+                self._device_present[name] = res.present
+                if not res.present:
+                    self.event("device", "DeviceDisconnected", f"device/{name}",
+                               res.errors.get("device", "not present"))
+                continue
+            if res.present != was:
+                self._device_present[name] = res.present
+                if res.present:
+                    self.event("device", "DeviceConnected", f"device/{name}", res.label or name)
+                else:
+                    self.event("device", "DeviceDisconnected", f"device/{name}",
+                               res.errors.get("device", "not present"))
+        for name in list(self._device_present):
+            if name not in desired.devices:
+                del self._device_present[name]
+
+    def _note_audio_engine(self, graph: Graph) -> None:
+        sr = getattr(graph, "sample_rate", None)
+        try:
+            sr = sr() if callable(sr) else sr
+        except Exception:
+            sr = None
+        if sr and self._sample_rate and sr != self._sample_rate:
+            self.event("device", "SampleRateChanged", "jack", f"{self._sample_rate} Hz -> {sr} Hz",
+                       old=self._sample_rate, new=sr)
+        if sr:
+            self._sample_rate = sr
+        if hasattr(graph, "cpu_load"):
+            try:
+                self.cpu_load = round(float(graph.cpu_load()), 2)
+            except Exception:
+                self.cpu_load = None
+        drain = getattr(graph, "drain_xruns", None)
+        xruns = drain() if drain else []
+        if not xruns:
+            return
+        rig = self._last_rig
+        # PipeWire reconfigures its graph when clients come and go, which
+        # often costs one cycle; flag those so they aren't read as overload.
+        change = self.clock() - self._last_change < XRUN_CHANGE_WINDOW
+        note = ", during a graph change" if change else ""
+        self.xruns_total += len(xruns)
+        if rig:
+            self.rig_xruns[rig] = self.rig_xruns.get(rig, 0) + len(xruns)
+        # One event per xrun, unless it's a burst: then one summary event.
+        if len(xruns) <= 3:
+            for t, delay in xruns:
+                self.event("xrun", "Xrun", f"rig/{rig}" if rig else "jack",
+                           f"xrun (delay {delay:.0f} us, DSP load {self.cpu_load}%{note})",
+                           delay_usecs=round(delay), cpu_load=self.cpu_load, at=round(t, 6),
+                           graph_change=change or None)
+        else:
+            worst = max(d for _, d in xruns)
+            self.event("xrun", "Xrun", f"rig/{rig}" if rig else "jack",
+                       f"{len(xruns)} xruns (worst delay {worst:.0f} us, DSP load {self.cpu_load}%{note})",
+                       count=len(xruns), delay_usecs=round(worst), cpu_load=self.cpu_load,
+                       graph_change=change or None)
+
     def apply_cc(self, plugin_id: str, symbol: str, value: float) -> None:
         """Called on the CC router thread. Updates `live` only, never `applied`."""
         m = self.managed.get(plugin_id)
@@ -443,6 +546,9 @@ class Reconciler:
             return
         m.instance.set_param(symbol, value)
         m.live[symbol] = value
+        if self.log_cc_values:
+            self.event("midi", "CcValue", f"plugin/{plugin_id}", f"{symbol} = {value:g}",
+                       symbol=symbol, value=round(value, 6))
 
     def _midi_status(self) -> dict:
         r = self.cc_router

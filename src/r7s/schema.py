@@ -227,11 +227,17 @@ class Display(str, Enum):
     never = "never"
 
 
+class LogSpec(Model):
+    backend: Literal["auto", "journal", "file"] = "auto"
+    midi_cc: bool = Field(default=False, alias="midiCC")  # log every mapped CC value
+
+
 class ConfigSpec(Model):
     backend: Backend = Backend.auto
     display: Display = Display.auto
     plugin_paths: list[str] | None = Field(default=None, alias="pluginPaths")
     jalv_path: str | None = Field(default=None, alias="jalvPath")
+    log: LogSpec = Field(default_factory=LogSpec)
 
 
 # --- envelope ------------------------------------------------------------

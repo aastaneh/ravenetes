@@ -292,9 +292,11 @@ def validate(inputs, recursive, live, strict, output, plugin_paths, no_cache) ->
 
 from .cli_midi import register as register_midi  # noqa: E402
 from .cli_ops import register  # noqa: E402
+from .cli_system import register as register_system  # noqa: E402
 
 register(main)
 register_midi(main)
+register_system(main)
 
 if __name__ == "__main__":
     main()

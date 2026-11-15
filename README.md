@@ -3,12 +3,14 @@
 Declare LV2/JACK audio rigs in YAML, Kubernetes-style. See
 [docs/DESIGN.md](docs/DESIGN.md) for the full design.
 
-**Status:** phases 1–2 are done:
+**Status:** phases 1–4 are done:
 - plugin discovery and validation
 - the `r7sd` daemon, with the jalv backend, hardware resolution through
   PipeWire, and incremental reconcile
+- MIDI: hardware, CC mapping, and discovery commands
+- structured event logs, xrun tracking, and `system-check`
 
-Next: MIDI (CC mapping, MIDI hardware), structured logs, and the web UI.
+Next: the web UI.
 
 ## Setup
 
@@ -47,6 +49,14 @@ uv run r7sctl describe rig guitar-rig                   # plugins, connections, 
 Every command takes `-o json`. `apply`, `diff` and `delete` accept files,
 directories (`-R`) or `-` for stdin, so remote use is
 `ssh pi r7sctl apply -f - < rig.yaml`.
+
+## When something's wrong
+
+```bash
+uv run r7sctl system-check                 # PipeWire, JACK, jalv, plugins, MIDI, realtime
+uv run r7sctl logs -p warning --since today
+uv run r7sctl logs -f -n 0                 # watch live: crashes, xruns, device changes
+```
 
 ## Plugin search paths
 

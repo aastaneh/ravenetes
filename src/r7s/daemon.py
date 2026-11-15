@@ -24,6 +24,7 @@ from .config import resolve_plugin_paths
 from .hw import inventory
 from .jackgraph import JackGraph
 from .loader import LoadResult
+from .eventlog import EventLog, choose_sink
 from .midi_cc import CcRouter
 from .lv2.world import PluginWorld
 from .reconciler import Reconciler
@@ -155,6 +156,31 @@ def backend_key(res: LoadResult):
     return (tuple(resolve_plugin_paths((), res).paths), cfg.jalv_path if cfg else None)
 
 
+def _stderr_is_journal() -> bool:
+    """systemd sets JOURNAL_STREAM=dev:ino when stderr goes to the journal."""
+    js = os.environ.get("JOURNAL_STREAM", "")
+    try:
+        dev, ino = (int(x) for x in js.split(":"))
+        st = os.fstat(2)
+    except (ValueError, OSError):
+        return False
+    return (st.st_dev, st.st_ino) == (dev, ino)
+
+
+def _stderr_echo(sink):
+    """Echo events to stderr for terminals; skip it when stderr *is* the
+    journal and events already go there with structured fields."""
+    if sink.name == "journal" and _stderr_is_journal():
+        return None
+    elog = logging.getLogger("r7s.events")
+
+    def echo(r) -> None:
+        level = logging.WARNING if r.priority <= 4 else logging.DEBUG if r.priority == 7 else logging.INFO
+        elog.log(level, "%s %s %s: %s", r.type, r.reason, r.object, r.message)
+
+    return echo
+
+
 def maybe_reexec_under_pw_jack(argv: list[str]) -> None:
     """Make sure libjack is PipeWire's when PipeWire is running."""
     if os.environ.get("R7S_NO_REEXEC") or "pipewire-0.3/jack" in os.environ.get("LD_LIBRARY_PATH", ""):
@@ -188,6 +214,12 @@ def main(argv: list[str] | None = None) -> None:
     for problem in store.load():
         log.warning("%s", problem)
 
+    cfg = _config(store.as_load_result())
+    make_sink = lambda backend: choose_sink(backend, args.state_dir)  # noqa: E731
+    sink = make_sink(cfg.log.backend if cfg else "auto")
+    events = EventLog([sink], echo=_stderr_echo(sink))
+    log.info("event log: %s%s", sink.name, f" ({sink.path})" if sink.name == "file" else "")
+
     reconciler = Reconciler(
         store,
         make_backend=make_backend,
@@ -196,6 +228,8 @@ def main(argv: list[str] | None = None) -> None:
         hw_snapshot=inventory.snapshot,
         backend_key=backend_key,
         make_cc_router=lambda sink: CcRouter(sink),
+        eventlog=events,
+        make_sink=make_sink,
     )
     api = Api(store, reconciler, make_world, inventory.snapshot, args.socket)
 
@@ -223,8 +257,11 @@ def main(argv: list[str] | None = None) -> None:
     try:
         server.serve_forever(poll_interval=0.5)
     finally:
+        reconciler.event("system", "Stopping", "r7sd", "shutting down")
         reconciler.shutdown()
         server.server_close()
+        reconciler.event("system", "Stopped", "r7sd", "stopped")
+        events.close()
         try:
             os.unlink(args.socket)
         except FileNotFoundError:
