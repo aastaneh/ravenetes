@@ -324,9 +324,27 @@ Every discovery and diagnostic command supports `-o json`.
   backend.
 - **Desktop** (`display: always`, or X11/Wayland available): jalv with its
   GTK UI, so native LV2 UI windows open. Per-plugin `ui: false` opts out.
-- **Open spike:** confirm that jalv's GTK frontend still takes stdin control
-  commands while showing a UI. If it doesn't, the desktop mode needs another
-  control path, such as a JACK-side parameter channel.
+- **jalv spike result (2026-11-15).** r7sd drives the console `jalv` over
+  stdin: `set SYMBOL VALUE` for live changes, `-c SYM=VAL` for launch values,
+  and `quit` to stop. Findings, all verified by measuring the audio output
+  with a JACK client:
+  - Distro jalv 1.8.0 ignores `set` on port controls, because port controls
+    never get a value type. Fixed upstream in 1.8.2 (commit `1e63ed5`), but
+    1.8.2+ needs lilv ≥ 0.28, which Ubuntu 26.04 doesn't ship.
+  - Its console spins at 100% CPU once stdin closes and then ignores SIGTERM.
+    A command line over 1023 bytes overflows a stack buffer and aborts.
+    Both bugs are still on upstream main.
+  - `jalv.gtk3` doesn't read stdin at all, so it can't be the controlled
+    process.
+  - **Decision:** r7s uses a patched 1.8.0 built by
+    `third_party/jalv/build.sh` (patches in `third_party/jalv/patches/`),
+    installed to `~/.local/opt/r7s-jalv`. r7sd still never closes a jalv's
+    stdin on purpose, and it falls back to SIGKILL on its own child if
+    `quit` times out.
+  - **Native UIs stay open.** The GTK frontend can't be controlled, so the
+    desktop mode needs another way to get native windows (e.g. console jalv
+    with `-s`, which this build supports through suil, or a separate UI-only
+    process). This is still to be tested.
 
 ## Observability
 
@@ -352,7 +370,8 @@ running under systemd it falls back to an append-only JSON-lines file.
 ## Distribution
 
 - `pip install r7sctl` (Python ≥ 3.11).
-- System deps: `pipewire-jack` (or `jackd`) and `jalv`. `mod-host` and
+- System deps: `pipewire-jack` (or `jackd`) and a jalv with working console
+  `set` (≥ 1.8.2, or the patched build in `third_party/jalv/`). `mod-host` and
   `lilv-utils` are optional.
 - Architecture-agnostic: x86_64, ARM64, ARM32, anywhere Linux + JACK runs.
 

@@ -1,0 +1,56 @@
+From 983bc1447649300293302091ad3c2d5c136bc48b Mon Sep 17 00:00:00 2001
+From: r7s <r7s@localhost>
+Date: Sun, 15 Nov 2026 14:27:39 -0800
+Subject: [PATCH 2/2] Quit console on stdin EOF and bound command length
+
+With poll(), a closed stdin is always readable and read() returns 0, so the
+loop spun at full CPU forever. Treat EOF as quit. Also stop reading into
+the fixed 1024-byte line buffer once it is full.
+---
+ src/console/jalv_console.c | 21 +++++++++++++++++----
+ 1 file changed, 17 insertions(+), 4 deletions(-)
+
+diff --git a/src/console/jalv_console.c b/src/console/jalv_console.c
+index 0b8e5b5..a33cf70 100644
+--- a/src/console/jalv_console.c
++++ b/src/console/jalv_console.c
+@@ -524,6 +524,7 @@ jalv_frontend_run(Jalv* jalv)
+     CommandStatus st = (jalv_update(jalv) < 0) ? COMMAND_QUIT : COMMAND_SUCCESS;
+ 
+     size_t len        = 0;
++    bool   discarding = false;
+     char   line[1024] = {0};
+     while (st != COMMAND_QUIT && zix_sem_try_wait(&jalv->done)) {
+ #if USE_POLL
+@@ -533,12 +534,24 @@ jalv_frontend_run(Jalv* jalv)
+         st = COMMAND_QUIT;
+       } else if (rc == 1) {
+         const ssize_t n = read(STDIN_FILENO, line + len, 1);
+-        if (n == 1) {
++        if (n == 0) {
++          st = COMMAND_QUIT; // EOF: stdin closed, nothing more will arrive
++        } else if (n == 1) {
+           if (line[len] == '\n') {
+-            line[len] = '\0';
+-            st        = process_command(jalv, line);
+-            len       = 0;
++            if (discarding) {
++              discarding = false;
++            } else {
++              line[len] = '\0';
++              st        = process_command(jalv, line);
++            }
++            len = 0;
+             print_prompt(stdout);
++          } else if (discarding) {
++            // Skip the rest of an over-long line
++          } else if (len + 2U >= sizeof(line)) {
++            fprintf(stderr, "error: command too long\n");
++            discarding = true; // Drop the whole line rather than overflow
++            len        = 0;
+           } else {
+             ++len;
+           }
+-- 
+2.53.0
+

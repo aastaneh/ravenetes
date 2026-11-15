@@ -1,0 +1,26 @@
+From 76b195f71448be7d6fc58e7e45bf0dd1da3d7959 Mon Sep 17 00:00:00 2001
+From: r7s <r7s@localhost>
+Date: Sun, 15 Nov 2026 14:27:29 -0800
+Subject: [PATCH 1/2] Fix port controls
+
+Backport of upstream jalv commit 1e63ed5 (released in 1.8.2). Port
+controls never had value_type set, so console "set" silently did nothing.
+---
+ src/control.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/control.c b/src/control.c
+index b41fdee..3125e1d 100644
+--- a/src/control.c
++++ b/src/control.c
+@@ -48,6 +48,7 @@ new_port_control(const LilvPlugin* const     plugin,
+   id->symbol      = lilv_node_duplicate(lilv_port_get_symbol(plugin, port));
+   id->label       = lilv_port_get_name(plugin, port);
+   id->group       = lilv_port_get(plugin, port, nodes->pg_group);
++  id->value_type  = forge->Float;
+   id->is_writable = lilv_port_is_a(plugin, port, nodes->lv2_InputPort);
+   id->is_readable = lilv_port_is_a(plugin, port, nodes->lv2_OutputPort);
+   id->is_toggle   = lilv_port_has_property(plugin, port, nodes->lv2_toggled);
+-- 
+2.53.0
+
