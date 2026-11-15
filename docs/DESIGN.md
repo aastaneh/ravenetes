@@ -7,8 +7,8 @@ the MOD/modep graphical patchbay.
 
 Design settled (2026-11-15). Phases 1 (schema, validation, plugin discovery),
 2 (daemon, jalv backend, hardware resolution, reconciler) and 3 (MIDI:
-hardware resolution, CC mapping, discovery tools) and 4 (event log, xruns,
-`logs`, `system-check`) implemented.
+hardware resolution, CC mapping, discovery tools), 4 (event log, xruns,
+`logs`, `system-check`) and 5 (web UI, hotplug) implemented.
 
 ## Motivation
 
@@ -577,10 +577,89 @@ One line per check, ✓/!/✗/·, with a fix hint. Exit 1 on any failure.
 
 ## Web UI (phase 5)
 
-- Read-only, served by r7sd as a static page with no build step.
-- One node per plugin and per device. Edges are labeled with ports
-  (`capture_l → in`), and a toggle expands a port-level view.
-- Live overlay: process status, xrun count, drift highlights.
+A read-only view of the rig, served by r7sd. No build step, no
+dependencies, and nothing loaded from the internet, so it works on an
+offline Pi at a gig.
+
+### Serving and security
+
+- **Listener:** `Config.spec.ui.listen`, default `127.0.0.1:7377`. Use
+  `0.0.0.0:7377` (or `[::]:7377`) to expose it on the LAN deliberately;
+  without that, view a headless Pi with `ssh -L 7377:localhost:7377 pi`.
+  `ui.enabled: false` turns it off. Changes apply live.
+- **Finding it:** `r7sctl ui [--open]` prints or opens the URL, and
+  `r7sctl status` shows it.
+- **Read-only:** the listener has only GET routes (the page, `/api/graph`,
+  `/api/status`, `/api/events`, `/api/stream`). Anything else returns 405.
+  apply and delete stay on the Unix socket.
+- **DNS rebinding:** on loopback, requests whose `Host` isn't
+  localhost/127.0.0.1/::1 get 421. Otherwise a hostile page could resolve
+  its own name to 127.0.0.1 and read the rig through your browser.
+- **Content-Security-Policy:** `default-src 'self'`, no inline script.
+  All data enters the DOM through `textContent`, never `innerHTML`.
+
+### Graph
+
+- **Model:** `/api/graph?rig=` returns nodes for plugins and device
+  *sides*. A device used for input and output appears twice: "(in)" on the
+  left, "(out)" on the right, so the graph always reads left to right.
+  Edges are port-level, with live state (Connected, Pending, Unresolved
+  with a reason, Inactive). Each plugin carries its parameters with live
+  value, spec value, applied value, drift, and CC mapping.
+- **Layout:** `layout.js`, about 200 lines, unit-tested with Node.
+  - **Columns:** hardware inputs, then plugins by longest path (source
+    plugins like oscillators start in the first plugin column), then
+    hardware outputs.
+  - **Ordering:** barycenter sweeps within each column to reduce crossings.
+  - **Long edges:** an edge skipping columns gets a dummy node per column,
+    so it runs in its own lane instead of through other nodes.
+  - **Robustness:** cycles and dangling edges are tolerated.
+- **Plugin view:** one box per plugin. Parallel cables collapse into a
+  bundle labelled "N cables". Single cables between neighbours aren't
+  labelled (they'd collide with nodes); their ports are in the tooltip and
+  the port view.
+- **Port view** (`?view=port`): ports listed per node, cables attached to
+  port rows.
+- **Status at a glance:**
+  - stripe colour per plugin state: Running, Starting/Waiting, CrashLoop,
+    Inactive
+  - chips: restarts ↻N, drift ≈N, CC, missing plugin, absent device
+  - absent devices drawn dashed
+  - Pending cables animated; Unresolved red and dotted
+- **Details panel:** click a node, or deep-link with `#p:drive`. Shows
+  state, PID, uptime, restarts, last error and output, ports, a parameter
+  table (live vs spec, drift highlighted, CC badges, ranges and labels),
+  and the node's connections with reasons.
+- **Other rigs:** the rig picker shows stored, inactive rigs statically
+  (`?rig=NAME`). Problem banners are scoped to the active rig.
+- **Live updates:** SSE `/api/stream` sends each event plus a status ping
+  per reconcile pass. The page re-fetches the graph at most every ~0.7s.
+  EventSource reconnects on its own, and the header dot shows the
+  connection state.
+- **Interaction and layout:**
+  - wheel zoom, drag pan, pinch zoom
+  - fit-to-screen never shrinks below 70% (45% on phones); past that you
+    pan instead of squinting
+  - a ResizeObserver keeps the zoom level stable when the panel opens or
+    the window resizes
+  - the event footer has a fixed height, so arriving events don't rescale
+    the graph
+  - phones get a normal scrolling page
+  - light and dark follow the system setting
+
+## Hotplug
+
+- **Source:** r7sd listens to kernel uevents on a netlink socket
+  (`NETLINK_KOBJECT_UEVENT`, no libudev). `add`/`remove` of a `sound` card
+  node triggers a hardware re-read immediately, then again at +0.5s, +2s
+  and +5s. The kernel announces a card before udev has fixed permissions
+  and before PipeWire has created its nodes, so the first read often
+  misses it.
+- **Effect:** device presence changes become `DeviceConnected` and
+  `DeviceDisconnected` events, and edges and CC routes recover by
+  themselves.
+- **Without netlink** (containers): r7sd falls back to the existing
+  triggers, which are JACK graph changes and a 10s periodic re-read.
 
 ## Distribution
 
@@ -610,7 +689,7 @@ One line per check, ✓/!/✗/·, with a fix hint. Exit 1 on any failure.
 3. Tier-2 hardware checks, MIDI hardware resolution, CC mapping, and
    `midi devices`/`listen`/`sniff`.
 4. Structured logs (journal/JSON), xrun events, `logs`, and `system-check`.
-5. Web UI, then udev hotplug handling.
+5. Web UI, then hotplug handling.
 
 ## Decision log (2026-11-15)
 
@@ -634,3 +713,6 @@ One line per check, ✓/!/✗/·, with a fix hint. Exit 1 on any failure.
 | Hardware backend | PipeWire only in v1 (jackd: plugins work, device edges don't) |
 | Endpoint ambiguity | Optional `capture:`/`playback:` selectors on Device |
 | Journal access | journald native socket protocol, no libsystemd binding |
+| Web UI exposure | `127.0.0.1:7377` by default; LAN only by explicit `ui.listen`; read-only either way |
+| Web UI assets | Vanilla JS + SVG, own layered layout, no CDN (works offline) |
+| Hotplug | Kernel uevents via netlink, plus re-reads at +0.5/2/5s |

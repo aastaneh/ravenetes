@@ -237,7 +237,7 @@ def register(main: click.Group) -> None:  # noqa: C901 (one place for all comman
             for i in items:
                 spec = i["manifest"]["spec"]
                 st = i.get("status") or {}
-                bus = "usb" if spec.get("usb") else "pci"
+                bus = next((b for b in ("usb", "pci", "alsa") if spec.get(b)), "-")
                 present = "yes" if st.get("present") else ("no" if st else "-")
                 rows.append([p + i["name"], bus, spec.get(bus), present,
                              st.get("capture") or "-", st.get("playback") or "-", _age(i.get("appliedAt"))])
@@ -373,6 +373,22 @@ def register(main: click.Group) -> None:  # noqa: C901 (one place for all comman
             click.echo(f"# live values differ from the stored rig: {', '.join(resp['changed'])}", err=True)
 
     @main.command()
+    @click.option("--open", "open_", is_flag=True, help="Open it in a browser.")
+    @_socket_option
+    def ui(open_, socket):
+        """Print the web UI's URL (and optionally open it)."""
+        code, st = _call(Client(socket), "GET", "/v1/status")
+        info = st.get("ui") or {}
+        if not info.get("url"):
+            _err(info.get("error") or "the web UI is disabled (Config spec.ui.enabled: false)")
+            sys.exit(1)
+        click.echo(info["url"])
+        if open_:
+            import webbrowser  # noqa: PLC0415
+
+            webbrowser.open(info["url"])
+
+    @main.command()
     @click.option("-o", "--output", type=click.Choice(["text", "json"]), default="text", show_default=True)
     @_socket_option
     def status(output, socket):
@@ -402,6 +418,8 @@ def register(main: click.Group) -> None:  # noqa: C901 (one place for all comman
         phase = (st.get("rigs", {}).get(rig) or {}).get("phase") if rig else None
         click.echo(f"Active:    {f'Rig/{rig} ({phase})' if rig else 'none'}")
         click.echo(f"Plugins:   {d.get('plugins')} installed")
+        u = st.get("ui") or {}
+        click.echo(f"Web UI:    {u.get('url') or u.get('error') or 'disabled'}")
 
     # --- hardware discovery --------------------------------------------------
 

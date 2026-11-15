@@ -232,12 +232,28 @@ class LogSpec(Model):
     midi_cc: bool = Field(default=False, alias="midiCC")  # log every mapped CC value
 
 
+class UiSpec(Model):
+    enabled: bool = True
+    # host:port. Localhost by default; set 0.0.0.0:7377 to expose the
+    # read-only UI on the LAN on purpose.
+    listen: str = "127.0.0.1:7377"
+
+    @field_validator("listen")
+    @classmethod
+    def _listen(cls, v: str) -> str:
+        host, sep, port = v.rpartition(":")
+        if not sep or not host or not port.isdigit() or not 0 < int(port) < 65536:
+            raise ValueError("expected host:port, e.g. 127.0.0.1:7377 or 0.0.0.0:7377")
+        return v
+
+
 class ConfigSpec(Model):
     backend: Backend = Backend.auto
     display: Display = Display.auto
     plugin_paths: list[str] | None = Field(default=None, alias="pluginPaths")
     jalv_path: str | None = Field(default=None, alias="jalvPath")
     log: LogSpec = Field(default_factory=LogSpec)
+    ui: UiSpec = Field(default_factory=UiSpec)
 
 
 # --- envelope ------------------------------------------------------------

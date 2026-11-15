@@ -59,6 +59,7 @@ class Api:
         self.hw_snapshot = hw_snapshot
         self.socket_path = socket_path
         self.started = time.time()
+        self.ui = None  # UiServer, set by the daemon
 
     # --- admission ---------------------------------------------------------
 
@@ -182,6 +183,9 @@ class Api:
     def status(self) -> tuple[int, dict]:
         st = dict(self.reconciler.status)
         st["starting"] = self.reconciler.reconciled_revision < 0  # no pass finished yet
+        if self.ui is not None:
+            st["ui"] = {"url": self.ui.url, "listen": self.ui.listen, "error": self.ui.error,
+                        "clients": self.ui.broadcaster.clients}
         st["revision"] = self.store.revision
         st["reconciledRevision"] = self.reconciler.reconciled_revision
         sinks = self.reconciler.log.sinks

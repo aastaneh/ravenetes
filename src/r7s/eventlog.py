@@ -36,11 +36,11 @@ PRIORITY_NAMES = {v: k for k, v in PRIORITIES.items()}
 # Default priority per reason; anything else is info.
 REASON_PRIORITY = {
     **dict.fromkeys(["Crashed", "StartFailed", "ConnectFailed", "DisconnectFailed", "ParameterFailed",
-                     "Error", "JackLost", "JackUnavailable"], 3),
+                     "Error", "JackLost", "JackUnavailable", "UiUnavailable"], 3),
     **dict.fromkeys(["Xrun", "CcUnmapped", "BackendProblem", "DeviceDisconnected", "ApplyRejected"], 4),
     **dict.fromkeys(["Applied", "Deleted", "RigActivated", "RigDeactivated", "DeviceConnected",
-                     "SampleRateChanged", "Started", "Stopping"], 5),
-    **dict.fromkeys(["ParameterSet", "CcValue"], 7),
+                     "SampleRateChanged", "Started", "Stopping", "UiListening"], 5),
+    **dict.fromkeys(["ParameterSet", "CcValue", "Hotplug"], 7),
 }
 # "Started"/"Stopped" for plugins are routine; only the daemon's own are notices.
 TYPE_REASON_PRIORITY = {("plugin", "Started"): 6, ("plugin", "Stopped"): 6}
@@ -232,6 +232,7 @@ class EventLog:
         self._lock = threading.Lock()
         self._echo = echo
         self._rig = rig
+        self.listeners: list[Callable[[Record], None]] = []
 
     def emit(self, type_: str, reason: str, obj: str, message: str, *,
              priority: int | None = None, **fields) -> Record:
@@ -249,6 +250,11 @@ class EventLog:
                 s.write(r)
         if self._echo is not None:
             self._echo(r)
+        for fn in self.listeners:
+            try:
+                fn(r)
+            except Exception as e:
+                log.debug("event listener failed: %s", e)
         return r
 
     @property

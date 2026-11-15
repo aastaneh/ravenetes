@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ravenetes</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <header class="bar">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l2-6 4 12 2-6h6"/></svg>
+      <span>r7s</span>
+    </div>
+    <label class="rigpick">
+      <span class="sr-only">Rig</span>
+      <select id="rig" aria-label="Rig"></select>
+    </label>
+    <span id="phase" class="badge">…</span>
+    <div class="stats" id="stats"></div>
+    <div class="spacer"></div>
+    <div class="seg" role="group" aria-label="View">
+      <button id="view-plugin" type="button" aria-pressed="true">Plugins</button>
+      <button id="view-port" type="button" aria-pressed="false">Ports</button>
+    </div>
+    <button id="fit" type="button" title="Fit to screen">Fit</button>
+    <span id="live" class="live" title="Live updates">●</span>
+  </header>
+
+  <main>
+    <section class="canvas" id="canvas" aria-label="Signal graph">
+      <svg id="graph" role="img" aria-label="Signal graph"></svg>
+      <div id="empty" class="empty" hidden></div>
+      <div id="problems" class="problems" hidden></div>
+    </section>
+    <aside class="panel" id="panel" aria-label="Details">
+      <div class="panel-head">
+        <h2 id="panel-title">Details</h2>
+        <button id="panel-close" type="button" aria-label="Close details">×</button>
+      </div>
+      <div id="panel-body" class="panel-body">
+        <p class="muted">Select a plugin or device.</p>
+      </div>
+    </aside>
+  </main>
+
+  <footer class="events">
+    <div class="events-head">
+      <h2>Events</h2>
+      <label class="muted"><input type="checkbox" id="ev-debug"> debug</label>
+    </div>
+    <ol id="events" class="event-list"></ol>
+  </footer>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

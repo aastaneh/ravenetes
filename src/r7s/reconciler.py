@@ -36,7 +36,8 @@ log = logging.getLogger(__name__)
 BACKOFF_START = 1.0
 BACKOFF_MAX = 30.0
 HW_REFRESH = 10.0
-XRUN_CHANGE_WINDOW = 1.5  # seconds after a structural change  # seconds; also refreshed on any JACK graph change
+XRUN_CHANGE_WINDOW = 1.5  # seconds after a structural change
+HOTPLUG_FOLLOWUPS = (0.5, 2.0, 5.0)  # re-read hardware this long after a uevent  # seconds; also refreshed on any JACK graph change
 EPS = 1e-9
 
 
@@ -96,6 +97,7 @@ class Reconciler:
         self.hw_error: str | None = None
         self._hw_at = -1e9
         self._hw_dirty = True
+        self._hw_followups: list[float] = []
 
         self.managed: dict[str, Managed] = {}
         self.crashes: dict[str, CrashRecord] = {}
@@ -112,6 +114,8 @@ class Reconciler:
         self._device_present: dict[str, bool] = {}
         self._last_rig: str | None = None
         self._last_change = -1e9  # clock() of the last plugin start/stop or re-cable
+        self.pass_hooks: list[Callable[[LoadResult], None]] = []  # run each pass, on this thread
+        self.status_listeners: list[Callable[[dict], None]] = []  # after each status publish
         self.log_cc_values = False  # Config spec.log.midiCC
         self._make_sink = make_sink
         self._log_backend: str | None = None
@@ -147,7 +151,7 @@ class Reconciler:
     def _run(self) -> None:
         try:
             while not self._stop.is_set():
-                self._wake.wait(timeout=2.0)
+                self._wake.wait(timeout=self._next_wait())
                 self._wake.clear()
                 if self._stop.is_set():
                     break
@@ -199,7 +203,28 @@ class Reconciler:
             self.graph_error = str(e)
             return False
 
+    def hardware_changed(self, what: str) -> None:
+        """A hotplug event. Hardware is re-read now and a few more times as
+        udev and PipeWire catch up (permissions, nodes, bridge ports)."""
+        now = self.clock()
+        with self.lock:
+            self._hw_dirty = True
+            self._hw_followups = sorted({*self._hw_followups, *(now + d for d in HOTPLUG_FOLLOWUPS)})
+        self.event("device", "Hotplug", "hardware", what)
+        self._wake.set()
+
+    def _next_wait(self) -> float:
+        with self.lock:
+            if not self._hw_followups:
+                return 2.0
+            return max(0.0, min(2.0, self._hw_followups[0] - self.clock()))
+
     def _refresh_hw(self, now: float) -> None:
+        with self.lock:
+            due = [t for t in self._hw_followups if t <= now]
+            if due:
+                self._hw_followups = [t for t in self._hw_followups if t > now]
+                self._hw_dirty = True
         if not self._hw_dirty and now - self._hw_at < HW_REFRESH:
             return
         self._hw_dirty = False
@@ -445,6 +470,16 @@ class Reconciler:
         with self.lock:
             self.status = status
             self.reconciled_revision = revision
+        for hook in self.pass_hooks:
+            try:
+                hook(resources)
+            except Exception:
+                log.exception("pass hook failed")
+        for listener in self.status_listeners:
+            try:
+                listener(status)
+            except Exception:
+                log.exception("status listener failed")
 
     def _apply_log_config(self, resources: LoadResult) -> None:
         cfgs = resources.of_kind("Config")

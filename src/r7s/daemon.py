@@ -26,6 +26,9 @@ from .jackgraph import JackGraph
 from .loader import LoadResult
 from .eventlog import EventLog, choose_sink
 from .midi_cc import CcRouter
+from .schema import UiSpec
+from .hw.uevent import UeventMonitor
+from .ui.server import UiServer
 from .lv2.world import PluginWorld
 from .reconciler import Reconciler
 from .store import Store, default_state_dir
@@ -232,6 +235,27 @@ def main(argv: list[str] | None = None) -> None:
         make_sink=make_sink,
     )
     api = Api(store, reconciler, make_world, inventory.snapshot, args.socket)
+    ui = UiServer(reconciler, store, lambda: api.status()[1])
+    api.ui = ui
+    reconciler.log.listeners.append(lambda r: ui.broadcaster.publish("event", r.to_dict()))
+    reconciler.status_listeners.append(
+        lambda st: ui.broadcaster.publish("status", {"revision": st.get("revision"), "passes": st.get("passes")}))
+    ui_error = [None]
+
+    def ui_hook(res: LoadResult) -> None:
+        cfg = _config(res)
+        spec = cfg.ui if cfg else UiSpec()
+        msg = ui.ensure(spec.enabled, spec.listen)
+        if msg:
+            reconciler.event("system", "UiListening", "ui", msg)
+        if ui.error != ui_error[0]:
+            ui_error[0] = ui.error
+            if ui.error:
+                reconciler.event("system", "UiUnavailable", "ui", ui.error)
+
+    reconciler.pass_hooks.append(ui_hook)
+    hotplug = UeventMonitor(lambda ev: reconciler.hardware_changed(f"{ev.action} {ev.card} ({ev.devpath})"))
+    hotplug.start()
 
     _claim_socket(args.socket)
     old_umask = os.umask(0o177)  # socket is private to this user
@@ -258,6 +282,8 @@ def main(argv: list[str] | None = None) -> None:
         server.serve_forever(poll_interval=0.5)
     finally:
         reconciler.event("system", "Stopping", "r7sd", "shutting down")
+        ui.stop()
+        hotplug.stop()
         reconciler.shutdown()
         server.server_close()
         reconciler.event("system", "Stopped", "r7sd", "stopped")

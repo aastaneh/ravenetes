@@ -3,14 +3,16 @@
 Declare LV2/JACK audio rigs in YAML, Kubernetes-style. See
 [docs/DESIGN.md](docs/DESIGN.md) for the full design.
 
-**Status:** phases 1–4 are done:
+**Status:** v1 (phases 1–5) is done:
 - plugin discovery and validation
 - the `r7sd` daemon, with the jalv backend, hardware resolution through
   PipeWire, and incremental reconcile
 - MIDI: hardware, CC mapping, and discovery commands
 - structured event logs, xrun tracking, and `system-check`
+- a read-only web UI with live updates, plus hotplug
 
-Next: the web UI.
+See `docs/DESIGN.md` for what v2 might add (rig banks with Program Change,
+mod-host and Carla backends).
 
 ## Setup
 
@@ -44,7 +46,12 @@ uv run r7sctl validate --live -f rig/                   # offline checks + insta
 uv run r7sctl apply -f rig/ --wait                      # hand it to r7sd
 uv run r7sctl get rigs
 uv run r7sctl describe rig guitar-rig                   # plugins, connections, events
+uv run r7sctl ui --open                                 # live graph in the browser
 ```
+
+The web UI listens on `http://localhost:7377/` (read-only). On a headless
+Pi, use `ssh -L 7377:localhost:7377 pi`, or set
+`Config.spec.ui.listen: 0.0.0.0:7377` to expose it on the LAN.
 
 Every command takes `-o json`. `apply`, `diff` and `delete` accept files,
 directories (`-R`) or `-` for stdin, so remote use is
@@ -71,7 +78,8 @@ Highest precedence first:
 ## Development
 
 ```bash
-uv run pytest
+uv run pytest                       # Python
+node --test tests/js/*.test.mjs     # web UI layout
 ```
 
 The tests use fakes for jalv, JACK and PipeWire, plus an LV2 fixture bundle.
