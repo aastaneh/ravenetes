@@ -21,9 +21,10 @@ from . import __version__
 from .api import Api, dumps
 from .backend.jalv import JalvBackend
 from .config import resolve_plugin_paths
-from .hw import pipewire
+from .hw import inventory
 from .jackgraph import JackGraph
 from .loader import LoadResult
+from .midi_cc import CcRouter
 from .lv2.world import PluginWorld
 from .reconciler import Reconciler
 from .store import Store, default_state_dir
@@ -192,10 +193,11 @@ def main(argv: list[str] | None = None) -> None:
         make_backend=make_backend,
         make_graph=lambda cb: JackGraph("r7sd", on_change=cb),
         make_world=make_world,
-        hw_snapshot=pipewire.snapshot,
+        hw_snapshot=inventory.snapshot,
         backend_key=backend_key,
+        make_cc_router=lambda sink: CcRouter(sink),
     )
-    api = Api(store, reconciler, make_world, pipewire.snapshot, args.socket)
+    api = Api(store, reconciler, make_world, inventory.snapshot, args.socket)
 
     _claim_socket(args.socket)
     old_umask = os.umask(0o177)  # socket is private to this user

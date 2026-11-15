@@ -131,9 +131,9 @@ def test_snapshot_reports_live_values(env):
     h, api = env
     api.apply({"documents": docs(DEVICE + "---" + BASIC)})
     h.sync()
-    # A CC (phase 3) or the daemon itself moved the knob: reflected in "sent".
-    h.r.managed["amp"].sent["gain"] = -2.0
-    h.r.managed["amp"].sent["mode"] = 2.0
+    # A MIDI CC moved these knobs: reflected in "live".
+    h.r.managed["amp"].live["gain"] = -2.0
+    h.r.managed["amp"].live["mode"] = 2.0
     code, d = api.snapshot("r")
     params = d["manifest"]["spec"]["plugins"][0]["parameters"]
     assert params == {"gain": -2.0, "mode": "Lead"}

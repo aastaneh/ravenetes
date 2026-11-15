@@ -8,6 +8,7 @@ has physical ports that pipewire-jack exposes as `<node.description>:<port>`.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -82,6 +83,8 @@ class HwDevice:
     name: str
     sysfs_path: str | None
     nick: str | None = None
+    alsa_id: str | None = None  # ALSA card id, e.g. "sofhdadsp"
+    card: int | None = None  # ALSA card number
     nodes: list[HwNode] = field(default_factory=list)
 
     @property
@@ -104,14 +107,36 @@ def _hex4(v) -> str | None:
         return None
 
 
+@dataclass(frozen=True)
+class HwMidiPort:
+    """A port on PipeWire's ALSA sequencer bridge."""
+
+    client: int  # ALSA sequencer client
+    port: int
+    direction: Direction  # capture = MIDI coming from the device
+    jack_name: str
+    alias: str | None = None
+
+
+_SEQ_PATH = re.compile(r"^alsa:seq:[^:]*:client_(\d+):(capture|playback)_(\d+)$")
+
+
 @dataclass
 class HwGraph:
     devices: list[HwDevice] = field(default_factory=list)
+    midi_ports: list[HwMidiPort] = field(default_factory=list)
+
+    def midi_jack_name(self, client: int, port: int, direction: Direction) -> str | None:
+        for m in self.midi_ports:
+            if (m.client, m.port, m.direction) == (client, port, direction):
+                return m.jack_name
+        return None
 
     @classmethod
     def from_dump(cls, objects: list[dict]) -> HwGraph:
         devices: dict[int, HwDevice] = {}
         nodes: dict[int, HwNode] = {}
+        bridges: dict[int, str] = {}  # Midi/Bridge node id -> node.name (its JACK client)
         ports: list[tuple[int, str, dict]] = []
         for o in objects:
             t = o.get("type", "")
@@ -130,9 +155,14 @@ class HwGraph:
                     name=props.get("device.name", ""),
                     sysfs_path=props.get("device.sysfs.path"),
                     nick=props.get("device.nick"),
+                    alsa_id=props.get("alsa.id"),
+                    card=_int(props.get("api.alsa.card", props.get("alsa.card"))),
                 )
             elif t == "PipeWire:Interface:Node":
                 mc = props.get("media.class", "")
+                if mc == "Midi/Bridge":
+                    bridges[o["id"]] = props.get("node.name", "Midi-Bridge")
+                    continue
                 if not mc.startswith("Audio/"):
                     continue
                 nodes[o["id"]] = HwNode(
@@ -147,7 +177,18 @@ class HwGraph:
             elif t == "PipeWire:Interface:Port":
                 ports.append((o["id"], info.get("direction") or props.get("port.direction", ""), props))
 
+        midi: list[HwMidiPort] = []
         for pid, direction, props in ports:
+            if props.get("node.id") in bridges:
+                m = _SEQ_PATH.match(props.get("object.path", ""))
+                if m:
+                    midi.append(HwMidiPort(
+                        client=int(m.group(1)), port=int(m.group(3)),
+                        direction="capture" if m.group(2) == "capture" else "playback",
+                        jack_name=f"{bridges[props['node.id']]}:{props.get('port.name', '')}",
+                        alias=props.get("port.alias"),
+                    ))
+                continue
             node = nodes.get(props.get("node.id"))
             if node is None or props.get("port.monitor") or not props.get("port.physical"):
                 continue
@@ -169,17 +210,29 @@ class HwGraph:
                 dev.nodes.append(n)
         for d in devices.values():
             d.nodes.sort(key=lambda n: (n.media_class, n.label.lower()))
-        return cls(sorted(devices.values(), key=lambda d: d.id))
+        return cls(sorted(devices.values(), key=lambda d: d.id),
+                   sorted(midi, key=lambda m: (m.client, m.port, m.direction)))
 
     def find(self, bus: str, hwid: str, serial: str | None = None) -> list[HwDevice]:
         out = []
         for d in self.devices:
+            if bus == "alsa":
+                if d.alsa_id == hwid:
+                    out.append(d)
+                continue
             if d.bus != bus or d.hwid != hwid:
                 continue
             if serial is not None and not serial_matches(d.serial, serial):
                 continue
             out.append(d)
         return out
+
+
+def _int(v) -> int | None:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
 
 
 def serial_matches(device_serial: str | None, wanted: str) -> bool:

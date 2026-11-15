@@ -61,8 +61,8 @@ def test_schema_errors_point_at_field_lines():
 @pytest.mark.parametrize(
     "spec, message",
     [
-        ("{}", "set exactly one of 'usb' or 'pci'"),
-        ('{usb: "1235:8210", pci: "8086:a171"}', "set exactly one of 'usb' or 'pci'"),
+        ("{}", "set exactly one of 'usb', 'pci', or 'alsa'"),
+        ('{usb: "1235:8210", pci: "8086:a171"}', "set exactly one of 'usb', 'pci', or 'alsa'"),
         ('{usb: "1235-8210"}', "vendor:product"),
     ],
 )

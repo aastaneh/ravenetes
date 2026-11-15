@@ -12,12 +12,12 @@ from dataclasses import dataclass, field
 
 from .backend.base import InstanceSpec, client_name
 from .endpoints import EndpointError, parse_device_port, parse_endpoint
-from .hw.pipewire import HwGraph
-from .hw.resolve import DeviceResolution, resolve_device
+from .hw.inventory import Hardware
+from .hw.resolve import DeviceResolution
 from .loader import LoadResult
 from .lv2.model import Plugin
 from .lv2.world import PluginWorld
-from .schema import Device, Rig, param_initial
+from .schema import Device, ParamMapping, Rig, param_initial
 from .validate import SECTIONS, scale_point_value
 
 
@@ -27,6 +27,7 @@ class DesiredPlugin:
     params: dict[str, float]  # every control input: spec value or plugin default
     explicit: set[str] = field(default_factory=set)  # symbols set in the Rig
     plugin: Plugin | None = None
+    cc: dict[str, ParamMapping] = field(default_factory=dict)  # symbol -> CC mapping
 
     def launch_params(self) -> dict[str, float]:
         """Values to pass with -c: explicit ones and anything not at default."""
@@ -73,7 +74,7 @@ def to_float(plugin: Plugin, symbol: str, value) -> float | None:
 
 
 def resolve_devices(
-    resources: LoadResult, hw: HwGraph | None, hw_error: str | None
+    resources: LoadResult, hw: Hardware | None, hw_error: str | None
 ) -> dict[str, DeviceResolution]:
     out = {}
     for r in resources.of_kind("Device"):
@@ -82,14 +83,14 @@ def resolve_devices(
             out[r.name] = DeviceResolution(errors={"device": hw_error or "hardware state unknown"})
         else:
             s = d.spec
-            out[r.name] = resolve_device(hw, s.bus, s.hwid, s.serial, s.capture, s.playback)
+            out[r.name] = hw.resolve_spec(s)
     return out
 
 
 def compute_desired(
     resources: LoadResult,
     world: PluginWorld,
-    hw: HwGraph | None,
+    hw: Hardware | None,
     hw_error: str | None = None,
     jack_ports: Collection[str] | None = None,
     generations: dict[str, int] | None = None,
@@ -119,7 +120,10 @@ def compute_desired(
             q.symbol: q.default for q in plugin.ports if q.is_control_input and q.default is not None
         }
         explicit = set()
+        cc = {}
         for sym, v in p.parameters.items():
+            if isinstance(v, ParamMapping) and v.cc is not None:
+                cc[sym] = v
             initial = param_initial(v)
             if initial is None:
                 continue
@@ -128,7 +132,7 @@ def compute_desired(
                 params[sym] = f
                 explicit.add(sym)
         spec = InstanceSpec(id=p.id, uri=p.lv2, bundle=p.bundle, ui=bool(p.ui))
-        desired.plugins[p.id] = DesiredPlugin(spec, params, explicit, plugin)
+        desired.plugins[p.id] = DesiredPlugin(spec, params, explicit, plugin, cc)
 
     inline_cache: dict[str, DeviceResolution] = {}
 
@@ -148,7 +152,7 @@ def compute_desired(
             res = inline_cache.get(ep.node)
             if res is None:
                 res = (
-                    resolve_device(hw, ep.inline_bus, ep.inline_id)
+                    hw.resolve(ep.inline_bus, ep.inline_id)
                     if hw is not None
                     else DeviceResolution(errors={"device": hw_error or "hardware state unknown"})
                 )
@@ -168,3 +172,27 @@ def compute_desired(
             edge.reason = e1 or e2
             desired.edges.append(edge)
     return desired
+
+
+def cc_routes(desired: Desired) -> tuple[list, list[str]]:
+    """(routes, problems) for every CC mapping in the active rig."""
+    from .midi_cc import route_for  # noqa: PLC0415
+
+    routes, problems = [], []
+    for pid, want in desired.plugins.items():
+        for sym, m in want.cc.items():
+            port = want.plugin.port(sym) if want.plugin else None
+            res = desired.devices.get(m.device)
+            if port is None:
+                continue  # admission already rejected unknown parameters
+            if res is None:
+                problems.append(f"{pid}.{sym}: no Device named {m.device!r}")
+                continue
+            sources = res.seq_sources()
+            if not sources:
+                why = res.errors.get("device") or res.midi_error or f"{res.label or m.device} has no MIDI inputs"
+                problems.append(f"{pid}.{sym}: CC {m.cc} from {m.device}: {why}")
+                continue
+            for src in sources:
+                routes.append(route_for(port, src, m.cc, m.channel, pid, m.min, m.max))
+    return routes, problems

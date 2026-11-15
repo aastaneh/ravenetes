@@ -457,10 +457,13 @@ def _hw_devices_yaml(g: HwGraph) -> list[dict]:
     when a direction is ambiguous."""
     docs = []
     for d in g.devices:
-        if not d.bus or not d.hwid:
-            continue
         caps, plays = d.endpoints("capture"), d.endpoints("playback")
-        base = {"usb" if d.bus == "usb" else "pci": d.hwid}
+        if d.bus in ("usb", "pci") and d.hwid:
+            base = {d.bus: d.hwid}
+        elif d.alsa_id:
+            base = {"alsa": d.alsa_id}  # HATs, onboard codecs, virtual cards
+        else:
+            continue
         if d.bus == "usb" and d.serial and len(g.find(d.bus, d.hwid)) > 1:
             base["serial"] = d.serial
         short = slug(d.nick or d.description)

@@ -17,15 +17,14 @@ import yaml
 
 from . import __version__
 from .diagnostics import Diagnostic
-from .endpoints import EndpointError, parse_device_port, parse_endpoint
-from .hw.pipewire import HwGraph, PipeWireError
-from .hw.resolve import resolve_device
+from .hw.inventory import Hardware
+from .hw.pipewire import PipeWireError
 from .loader import LoadResult, load_document
 from .lv2.world import PluginWorld
 from .reconciler import Reconciler
 from .schema import KINDS
 from .store import Store, _spec_key, merged
-from .validate import validate_environment, validate_structure
+from .validate import validate_environment, validate_hardware, validate_structure
 
 KIND_ALIASES = {
     "rig": "Rig", "rigs": "Rig",
@@ -41,23 +40,6 @@ def canonical_kind(k: str) -> str | None:
     return KIND_ALIASES.get(k.lower())
 
 
-def _used_directions(resources: LoadResult) -> dict[str, set[str]]:
-    """Device alias -> {"capture", "playback"} sides referenced by any rig."""
-    used: dict[str, set[str]] = {}
-    for r in resources.of_kind("Rig"):
-        conns = r.resource.spec.connections
-        for c in [*conns.audio, *conns.midi]:
-            for raw in (c.from_, c.to):
-                try:
-                    ep = parse_endpoint(raw)
-                except EndpointError:
-                    continue
-                dp = parse_device_port(ep.port)
-                if dp is not None and not ep.is_inline:
-                    used.setdefault(ep.node, set()).add("capture" if dp.role == "source" else "playback")
-    return used
-
-
 def _diag_payload(ds: list[Diagnostic]) -> list[dict]:
     return [d.to_dict() for d in ds]
 
@@ -68,7 +50,7 @@ class Api:
         store: Store,
         reconciler: Reconciler,
         make_world: Callable[[LoadResult], PluginWorld],
-        hw_snapshot: Callable[[], HwGraph],
+        hw_snapshot: Callable[[], Hardware],
         socket_path: str | None = None,
     ):
         self.store = store
@@ -98,29 +80,11 @@ class Api:
         return diags
 
     def _hw_warnings(self, incoming: LoadResult, combined: LoadResult) -> list[Diagnostic]:
-        """Warn about Devices this change touches: incoming ones, and stored
-        ones that an incoming Rig uses. Only sides some rig uses count."""
-        used = _used_directions(combined)
-        touched = {r.name for r in incoming.of_kind("Device")}
-        touched |= set(_used_directions(incoming))
-        devices = [r for r in combined.of_kind("Device") if r.name in touched]
-        if not devices:
-            return []
         try:
             hw = self.hw_snapshot()
         except PipeWireError as e:
-            return [Diagnostic("warning", f"can't check hardware: {e}", tier=2)]
-        out = []
-        for r in devices:
-            s = r.resource.spec
-            res = resolve_device(hw, s.bus, s.hwid, s.serial, s.capture, s.playback)
-            for key, msg in res.errors.items():
-                if key != "device" and key not in used.get(r.name, set()):
-                    continue  # no rig uses this side of the device
-                field = ("spec", key) if key in ("capture", "playback") else ("spec", s.bus)
-                out.append(r.diag("warning", msg + ("; connections will wait for it" if key == "device" else ""),
-                                  field, tier=2))
-        return out
+            return validate_hardware(incoming, combined, None, str(e))
+        return validate_hardware(incoming, combined, hw)
 
     # --- endpoints -----------------------------------------------------------
 

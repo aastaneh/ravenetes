@@ -58,7 +58,7 @@ def test_usb_single_endpoint_needs_no_selector():
     assert res.errors == {}
     assert port(res, "capture_l") == ("Scarlett 2i2 USB Analog Stereo:capture_FL", None)
     assert port(res, "playback_r") == ("Scarlett 2i2 USB Analog Stereo:playback_FR", None)
-    assert port(res, "midi_capture")[1] == "MIDI hardware ports aren't resolved yet"
+    assert "no ALSA card number" in port(res, "midi_capture")[1]
 
 
 def test_identical_units_need_serial():

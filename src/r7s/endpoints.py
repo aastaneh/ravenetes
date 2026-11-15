@@ -6,14 +6,14 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
-from .schema import HWID_RE
+from .schema import ALSA_ID_RE, HWID_RE
 
 PortKind = Literal["audio", "midi"]
 Role = Literal["source", "sink"]
 
 _AUDIO_RE = re.compile(r"^(capture|playback)_(\d+|l|r)$")
 _MIDI_RE = re.compile(r"^midi_(capture|playback)(?:_(\d+))?$")
-_INLINE_RE = re.compile(r"^(usb|pci)/([^/]+)/([^/]+)$")
+_INLINE_RE = re.compile(r"^(usb|pci|alsa)/([^/]+)/([^/]+)$")
 
 
 class EndpointError(ValueError):
@@ -59,13 +59,18 @@ class Endpoint:
 def parse_endpoint(raw: str) -> Endpoint:
     s = raw.strip()
     if m := _INLINE_RE.match(s):
-        bus, hwid, port = m.group(1), m.group(2).lower(), m.group(3)
-        if not HWID_RE.match(hwid):
-            raise EndpointError(
-                f"{raw!r}: hardware ID must be vendor:product hex, e.g. {bus}/1235:8210/capture_l"
-            )
+        bus, hwid, port = m.group(1), m.group(2), m.group(3)
+        if bus == "alsa":
+            if not ALSA_ID_RE.match(hwid):
+                raise EndpointError(f"{raw!r}: ALSA card id must look like alsa/pisound/capture_1")
+        else:
+            hwid = hwid.lower()
+            if not HWID_RE.match(hwid):
+                raise EndpointError(
+                    f"{raw!r}: hardware ID must be vendor:product hex, e.g. {bus}/1235:8210/capture_l"
+                )
         return Endpoint(raw, f"{bus}/{hwid}", port, bus, hwid)
-    if s.startswith(("usb/", "pci/")):
+    if s.startswith(("usb/", "pci/", "alsa/")):
         raise EndpointError(f"{raw!r}: inline hardware reference must look like usb/1235:8210/<port>")
     node, sep, port = s.partition(":")
     if not sep or not node or not port:

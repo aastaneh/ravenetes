@@ -7,7 +7,9 @@ Policy (docs/DESIGN.md):
 - Structure is reconciled continuously: crashed plugins restart with backoff,
   r7s-declared edges removed by someone else come back.
 - Parameters are sent when the desired value changes (apply, rig switch).
-  Live tweaks persist until the spec changes.
+  `applied` is what the spec last asked for; `live` is what any source
+  (spec or MIDI CC) last sent. Only spec changes are compared against
+  `applied`, so CC moves and native-UI tweaks persist until the spec changes.
 - r7s only removes edges it created.
 """
 
@@ -21,8 +23,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from .backend.base import Backend, BackendError, Instance, InstanceSpec
-from .desired import Desired, compute_desired
-from .hw.pipewire import HwGraph, PipeWireError
+from .desired import Desired, cc_routes, compute_desired
+from .hw.inventory import Hardware
+from .hw.pipewire import PipeWireError
 from .jackgraph import Edge, Graph, GraphError
 from .loader import LoadResult
 from .lv2.world import PluginWorld
@@ -40,9 +43,9 @@ EPS = 1e-9
 class Managed:
     spec: InstanceSpec
     instance: Instance
-    sent: dict[str, float]
+    applied: dict[str, float]  # last values enforced from the spec
+    live: dict[str, float]  # last values sent from any source
     started_at: float
-    stopping: bool = False
 
 
 @dataclass
@@ -75,9 +78,10 @@ class Reconciler:
         make_backend: Callable[[LoadResult], Backend],
         make_graph: Callable[[Callable[[], None]], Graph],
         make_world: Callable[[LoadResult], PluginWorld],
-        hw_snapshot: Callable[[], HwGraph],
+        hw_snapshot: Callable[[], Hardware],
         clock: Callable[[], float] = time.monotonic,
         backend_key: Callable[[LoadResult], object] = lambda r: None,
+        make_cc_router: Callable[[Callable[[str, str, float], None]], object] | None = None,
     ):
         self.store = store
         self._make_backend = make_backend
@@ -98,7 +102,7 @@ class Reconciler:
         self._backend_cfg: object = object()
         self.world: PluginWorld | None = None
         self._world_rev = -1
-        self.hw: HwGraph | None = None
+        self.hw: Hardware | None = None
         self.hw_error: str | None = None
         self._hw_at = -1e9
         self._hw_dirty = True
@@ -110,6 +114,8 @@ class Reconciler:
         self.status: dict = {}
         self.events: collections.deque[Event] = collections.deque(maxlen=500)
         self.passes = 0
+        self.cc_router = make_cc_router(self.apply_cc) if make_cc_router else None
+        self.cc_problems: list[str] = []
         self.reconciled_revision = -1  # store revision the last finished pass saw
 
     # --- events ------------------------------------------------------------
@@ -134,6 +140,8 @@ class Reconciler:
         self._wake.set()
 
     def start(self) -> None:
+        if self.cc_router is not None:
+            self.cc_router.start()
         self._thread = threading.Thread(target=self._run, name="reconciler", daemon=True)
         self._thread.start()
 
@@ -160,6 +168,8 @@ class Reconciler:
             self._stop_instance(pid, why)
 
     def shutdown(self) -> None:
+        if self.cc_router is not None:
+            self.cc_router.stop()
         self._stop.set()
         self._wake.set()
         if self._thread and self._thread.is_alive():
@@ -275,7 +285,7 @@ class Reconciler:
                 rec.backoff = min(rec.backoff * 2, BACKOFF_MAX)
                 self.event("plugin", "StartFailed", f"plugin/{pid}", str(e))
                 continue
-            self.managed[pid] = Managed(want.spec, inst, dict(want.params), now)
+            self.managed[pid] = Managed(want.spec, inst, dict(want.params), dict(want.params), now)
             self.event("plugin", "Started", f"plugin/{pid}", f"{want.spec.uri} (pid {inst.pid})")
 
         # 4. parameters
@@ -284,10 +294,11 @@ class Reconciler:
             if want is None:
                 continue
             for sym, val in want.params.items():
-                if sym not in m.sent or abs(m.sent[sym] - val) > EPS:
+                if sym not in m.applied or abs(m.applied[sym] - val) > EPS:
                     try:
                         m.instance.set_param(sym, val)
-                        m.sent[sym] = val
+                        m.applied[sym] = val
+                        m.live[sym] = val
                         self.event("plugin", "ParameterSet", f"plugin/{pid}", f"{sym} = {val:g}")
                     except BackendError as e:
                         self.event("plugin", "ParameterFailed", f"plugin/{pid}", f"{sym}: {e}")
@@ -323,6 +334,15 @@ class Reconciler:
                     self.event("connection", "DisconnectFailed", f"{edge[0]} -> {edge[1]}", str(err))
                     continue
             self.owned.discard(edge)
+
+        # 6. MIDI CC routes (the router thread does the I/O)
+        routes, problems = cc_routes(desired)
+        if problems != self.cc_problems:
+            for msg in set(problems) - set(self.cc_problems):
+                self.event("midi", "CcUnmapped", "midi", msg)
+        self.cc_problems = problems
+        if self.cc_router is not None:
+            self.cc_router.update(routes)
 
         self._publish(resources, desired, graph.ports(), graph.connections(), revision)
 
@@ -403,6 +423,7 @@ class Reconciler:
             "rigs": rigs,
             "devices": devices,
             "ownedConnections": len(self.owned),
+            "midi": self._midi_status(),
             "passes": self.passes,
             "revision": revision,
         }
@@ -415,7 +436,29 @@ class Reconciler:
             self.status = status
             self.reconciled_revision = revision
 
+    def apply_cc(self, plugin_id: str, symbol: str, value: float) -> None:
+        """Called on the CC router thread. Updates `live` only, never `applied`."""
+        m = self.managed.get(plugin_id)
+        if m is None or not m.instance.alive():
+            return
+        m.instance.set_param(symbol, value)
+        m.live[symbol] = value
+
+    def _midi_status(self) -> dict:
+        r = self.cc_router
+        if r is None:
+            return {"enabled": False, "problems": list(self.cc_problems)}
+        return {
+            "enabled": r.stats.error is None,
+            "error": r.stats.error,
+            "routes": len(r.table.routes),
+            "subscribed": [f"{c}:{p}" for c, p in r.stats.subscribed],
+            "events": r.stats.events,
+            "applied": r.stats.applied,
+            "problems": list(self.cc_problems),
+        }
+
     def live_params(self, plugin_id: str) -> dict[str, float] | None:
         """Last values r7s sent to a running instance (includes CC-driven changes)."""
         m = self.managed.get(plugin_id)
-        return dict(m.sent) if m else None
+        return dict(m.live) if m else None

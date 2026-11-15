@@ -203,18 +203,75 @@ def resolve_bundle(r: Loaded, bundle: str) -> Path:
 
 
 def validate_environment(result: LoadResult, world: PluginWorld) -> list[Diagnostic]:
+    """Tier 2 plugin checks. Hardware is checked by validate_hardware."""
     out: list[Diagnostic] = []
     for r in result.of_kind("Rig"):
         out.extend(_check_rig_env(r, world))
-    if result.of_kind("Device") or any(
-        "/" in c.from_ or "/" in c.to
-        for r in result.of_kind("Rig")
-        for s in SECTIONS
-        for c in getattr(r.resource.spec.connections, s)
-    ):
-        out.append(
-            Diagnostic("info", "device presence and port checks are not implemented yet; skipped", tier=2)
-        )
+    return out
+
+
+def used_device_sides(resources: LoadResult) -> dict[str, set[str]]:
+    """Device alias -> sides rigs use: capture, playback, midi_capture,
+    midi_playback, and cc (a CC mapping reads the device's MIDI inputs)."""
+    used: dict[str, set[str]] = {}
+    for r in resources.of_kind("Rig"):
+        spec = r.resource.spec
+        for c in [*spec.connections.audio, *spec.connections.midi]:
+            for raw in (c.from_, c.to):
+                try:
+                    ep = parse_endpoint(raw)
+                except EndpointError:
+                    continue
+                dp = parse_device_port(ep.port)
+                if dp is None or ep.is_inline:
+                    continue
+                side = "capture" if dp.role == "source" else "playback"
+                used.setdefault(ep.node, set()).add(side if dp.kind == "audio" else f"midi_{side}")
+        for p in spec.plugins:
+            for v in p.parameters.values():
+                if isinstance(v, ParamMapping) and v.cc is not None and v.device:
+                    used.setdefault(v.device, set()).add("cc")
+    return used
+
+
+def validate_hardware(incoming: LoadResult, combined: LoadResult, hw, hw_error: str | None = None) -> list[Diagnostic]:
+    """Warnings (never errors) about the hardware the change touches.
+
+    Checks incoming Devices, plus stored Devices an incoming Rig uses, and
+    only the sides some rig uses. Hardware can be plugged in later; the rig
+    waits for it.
+    """
+    used = used_device_sides(combined)
+    touched = {r.name for r in incoming.of_kind("Device")} | set(used_device_sides(incoming))
+    devices = [r for r in combined.of_kind("Device") if r.name in touched]
+    if not devices:
+        return []
+    if hw is None:
+        return [Diagnostic("warning", f"can't check hardware: {hw_error or 'unavailable'}", tier=2)]
+    out = []
+    for r in devices:
+        s = r.resource.spec
+        res = hw.resolve_spec(s)
+        sides = used.get(r.name, set())
+        if "device" in res.errors:
+            out.append(r.diag("warning", res.errors["device"] + "; connections will wait for it",
+                              ("spec", s.bus), tier=2))
+            continue
+        for side in ("capture", "playback"):
+            if side in sides and side in res.errors:
+                out.append(r.diag("warning", res.errors[side], ("spec", side), tier=2))
+        for side, word in (("midi_capture", "inputs"), ("midi_playback", "outputs")):
+            if side not in sides and not (side == "midi_capture" and "cc" in sides):
+                continue
+            ports = (res.midi or {}).get(side.removeprefix("midi_"))
+            if res.midi is None:
+                out.append(r.diag("warning", res.midi_error or f"MIDI ports of {res.label} are unknown",
+                                  ("spec", s.bus), tier=2))
+                break
+            if not ports:
+                why = "CC mappings and MIDI connections" if side == "midi_capture" else "MIDI connections"
+                out.append(r.diag("warning", f"{res.label} has no MIDI {word}; {why} from it won't work",
+                                  ("spec", s.bus), tier=2))
     return out
 
 

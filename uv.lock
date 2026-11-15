@@ -3,6 +3,33 @@ revision = 3
 requires-python = ">=3.11"
 
 [[package]]
+name = "alsa-midi"
+version = "1.0.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cffi" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3f/90/3c624acf275c69aab1ce916fcbcb4b823ee99ade6f77730ed02250f0654b/alsa_midi-1.0.4.tar.gz", hash = "sha256:298873fe4266d03aa127abeab9af06d173b56677cf032d41a253dbbbc97ff224", size = 300890, upload-time = "2026-01-28T19:18:08.339Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6b/9b/c64404e0b232cd13cdb883d4f19929338699adb5dccf8fec69698759bef3/alsa_midi-1.0.4-cp311-cp311-manylinux_2_17_i686.whl", hash = "sha256:3cf50749c0b0bfc5edfe163e13c5977e7343b5fb5901244fe9daccfca7e09d64", size = 354295, upload-time = "2026-01-28T19:17:38.467Z" },
+    { url = "https://files.pythonhosted.org/packages/3a/da/39475828a5da33a066c34b5922218e534649737cb15e9f607b20fc0f27b5/alsa_midi-1.0.4-cp311-cp311-manylinux_2_17_x86_64.whl", hash = "sha256:1bd82768df6c24279580ca3b921fd2195def54e58fc268599aad76d9a2ccad48", size = 395046, upload-time = "2026-01-28T19:17:40.08Z" },
+    { url = "https://files.pythonhosted.org/packages/86/c4/b14285d1c884f914aa920a5a7c568df57169bd8b7af4a85281903231cb3b/alsa_midi-1.0.4-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:c7bb0c3173ac2d0aacf2824da9ed234bf097204d570c2508175b41c138f7aebd", size = 393680, upload-time = "2026-01-28T19:17:41.344Z" },
+    { url = "https://files.pythonhosted.org/packages/fd/f4/71e8864d45c30f5b38b505822518ebb1cd30e61843dc9df6921e9df2c534/alsa_midi-1.0.4-cp312-cp312-manylinux_2_17_i686.whl", hash = "sha256:82c7b8705d5c7a1eef93d9489485879a4593bd2729571e45bba0da81465144ce", size = 355437, upload-time = "2026-01-28T19:17:42.61Z" },
+    { url = "https://files.pythonhosted.org/packages/34/41/4d1b56c60a9d20c4757cce84160980fb2cdb40e1758b0a23d42c74206125/alsa_midi-1.0.4-cp312-cp312-manylinux_2_17_x86_64.whl", hash = "sha256:830b9398ad01b31e19380373ea73af5d91e1755dea9395172b18d087af6718b2", size = 399060, upload-time = "2026-01-28T19:17:43.969Z" },
+    { url = "https://files.pythonhosted.org/packages/10/67/ed84581aeca8ef78b5c4fa60ce102c117da3a072a6d152d4bc466dce155b/alsa_midi-1.0.4-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:0e3182e7c47fd32aa604b9915d73a6cd0f20d6e8f409d30c9dcf4da9a7493f6a", size = 398986, upload-time = "2026-01-28T19:17:45.237Z" },
+    { url = "https://files.pythonhosted.org/packages/50/c5/02993cf3c948ee7c92a945f2388921c7470ae12ca68f566dfc79bda3e00f/alsa_midi-1.0.4-cp313-cp313-manylinux_2_17_i686.whl", hash = "sha256:a081300aa0054d5d7d47b0b449eceb5b601f1434edd7af824d6bf713e3c77eac", size = 355360, upload-time = "2026-01-28T19:17:46.658Z" },
+    { url = "https://files.pythonhosted.org/packages/c0/4d/b5fc086d2d2705de5526751a2d8a08d5274f5000ab5a7a58d7cc0c088f9c/alsa_midi-1.0.4-cp313-cp313-manylinux_2_17_x86_64.whl", hash = "sha256:6d054efc8fb8c305cde84d9e69d939343c844296566049b4e352f9a546015542", size = 398958, upload-time = "2026-01-28T19:17:48.584Z" },
+    { url = "https://files.pythonhosted.org/packages/23/ff/1c76e02c0be4f78f122b4421c9222af8d1a5fbd0fae8c7ddd23d86a71aca/alsa_midi-1.0.4-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:9b3711ed3c43430d58718b5c4739c98025b26c502be4425c5d2098f790675af1", size = 398979, upload-time = "2026-01-28T19:17:49.886Z" },
+    { url = "https://files.pythonhosted.org/packages/01/59/8aee99899d0bff1454be12ceed697cf79db16c9b163fa3ad1647c797b919/alsa_midi-1.0.4-cp314-cp314-manylinux_2_17_i686.whl", hash = "sha256:c9b1913b8782b9539a9d56fa1ac63a05c7581c3675d3a1cc95442144d712cd8c", size = 355411, upload-time = "2026-01-28T19:17:51.275Z" },
+    { url = "https://files.pythonhosted.org/packages/c3/9e/ddb588de3312892dccbe24ceb80e53a4043a5e5746dc2003bb8c2c00fdfd/alsa_midi-1.0.4-cp314-cp314-manylinux_2_17_x86_64.whl", hash = "sha256:cc910d8349ea98670b3fbb0700ec32e8f8cccf0fbb006d0d084ac648f15e54f0", size = 399007, upload-time = "2026-01-28T19:17:52.598Z" },
+    { url = "https://files.pythonhosted.org/packages/47/74/c856768f85a139e196eda510dfd64ebae3b5e03b6322370fc1ca1ce0016f/alsa_midi-1.0.4-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:410f61c3b79f8fa4e7c9311bba367b95ffc9da528c6af9b99bbeb6fa56ef039a", size = 397615, upload-time = "2026-01-28T19:17:53.951Z" },
+    { url = "https://files.pythonhosted.org/packages/d0/d5/cbf3a497b7db2cc8014c6226bb0a381c84d11a024426662eed0462a21961/alsa_midi-1.0.4-cp314-cp314t-manylinux_2_17_i686.whl", hash = "sha256:7b0ac5d4f9d5d2e50d9fd654326798ccf4c94d03d615a4f4042e965963cf528a", size = 377020, upload-time = "2026-01-28T19:17:55.56Z" },
+    { url = "https://files.pythonhosted.org/packages/78/ca/077152e7879e760c756845d57b03faab7c272fdfafe946cafc2e5bfee48e/alsa_midi-1.0.4-cp314-cp314t-manylinux_2_17_x86_64.whl", hash = "sha256:eb5ecb83401cd4ed2dcb0b9500e3c2c4a28917fd3cbefad9893af12813c78619", size = 420191, upload-time = "2026-01-28T19:17:56.713Z" },
+    { url = "https://files.pythonhosted.org/packages/68/87/584bac3814129756dffa87e05608071a50a7dc7b33b597c11765123fdc44/alsa_midi-1.0.4-cp314-cp314t-manylinux_2_28_x86_64.whl", hash = "sha256:8520c1b3af2fc74f0f25d5d7152cefd1d8e73e6c74cb6827e8befba9775d71f8", size = 419185, upload-time = "2026-01-28T19:17:58.748Z" },
+    { url = "https://files.pythonhosted.org/packages/1b/4b/762472e90fc105a0897964f719d40728e6830c91a0f80e1fe90463b05c45/alsa_midi-1.0.4-py3-none-any.whl", hash = "sha256:7ac5f75e657977c2fae3fdb9fdf96dd4697c0567eccfdae9eba87581c2c0b33c", size = 43193, upload-time = "2026-01-28T19:18:07.094Z" },
+]
+
+[[package]]
 name = "annotated-types"
 version = "0.8.0"
 source = { registry = "https://pypi.org/simple" }
@@ -420,6 +447,7 @@ name = "r7sctl"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "alsa-midi" },
     { name = "click" },
     { name = "jack-client" },
     { name = "pydantic" },
@@ -434,6 +462,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "alsa-midi", specifier = ">=1.0" },
     { name = "click", specifier = ">=8.1" },
     { name = "jack-client", specifier = ">=0.5.4" },
     { name = "pydantic", specifier = ">=2.9" },

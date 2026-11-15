@@ -16,7 +16,9 @@ from .loader import InputError, load
 from .lv2.model import Plugin
 from .lv2.world import PluginWorld
 from .scaffold import scaffold_dict, scaffold_yaml
-from .validate import rig_bundles, validate_environment, validate_structure
+from .hw.inventory import snapshot as hw_snapshot
+from .hw.pipewire import PipeWireError
+from .validate import rig_bundles, validate_environment, validate_hardware, validate_structure
 
 
 def _err(msg: str) -> None:
@@ -258,6 +260,12 @@ def validate(inputs, recursive, live, strict, output, plugin_paths, no_cache) ->
     if live:
         world = _world(plugin_paths, no_cache, result, rig_bundles(result))
         report.extend(validate_environment(result, world))
+        if result.of_kind("Device"):  # only touch the hardware when it matters
+            try:
+                hw, hw_error = hw_snapshot(), None
+            except PipeWireError as e:
+                hw, hw_error = None, str(e)
+            report.extend(validate_hardware(result, result, hw, hw_error))
 
     errors, warnings = report.count("error"), report.count("warning")
     if output == "json":
@@ -282,9 +290,11 @@ def validate(inputs, recursive, live, strict, output, plugin_paths, no_cache) ->
     sys.exit(0 if report.ok else 1)
 
 
+from .cli_midi import register as register_midi  # noqa: E402
 from .cli_ops import register  # noqa: E402
 
 register(main)
+register_midi(main)
 
 if __name__ == "__main__":
     main()

@@ -22,6 +22,7 @@ API_VERSION = "r7s/v1"
 NAME_RE = r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
 PLUGIN_ID_RE = r"^[a-z0-9]([-_a-z0-9]*[a-z0-9])?$"
 HWID_RE = re.compile(r"^[0-9a-f]{4}:[0-9a-f]{4}$")
+ALSA_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,31}$")  # ALSA card id (/proc/asound/cards)
 
 Name = Annotated[str, Field(pattern=NAME_RE, max_length=63)]
 PluginId = Annotated[str, Field(pattern=PLUGIN_ID_RE, max_length=48)]  # JACK names: "r7s-" + id <= 63
@@ -119,6 +120,7 @@ def param_initial(v: ParamValue) -> bool | float | str | None:
 class DeviceSpec(Model):
     usb: str | None = None
     pci: str | None = None
+    alsa: str | None = None  # ALSA card id, for HATs/onboard/virtual cards
     serial: str | None = None
     # Pick one endpoint when the device has several (e.g. "Speaker", "HDMI1").
     capture: str | None = None
@@ -134,19 +136,28 @@ class DeviceSpec(Model):
             raise ValueError("expected vendor:product as two 4-digit hex IDs, e.g. '1235:8210'")
         return v
 
+    @field_validator("alsa")
+    @classmethod
+    def _alsa_id(cls, v: str | None) -> str | None:
+        if v is not None and not ALSA_ID_RE.match(v):
+            raise ValueError("expected an ALSA card id from /proc/asound/cards, e.g. 'pisound'")
+        return v
+
     @model_validator(mode="after")
     def _one_bus(self) -> DeviceSpec:
-        if (self.usb is None) == (self.pci is None):
-            raise ValueError("set exactly one of 'usb' or 'pci'")
+        if sum(x is not None for x in (self.usb, self.pci, self.alsa)) != 1:
+            raise ValueError("set exactly one of 'usb', 'pci', or 'alsa'")
+        if self.serial is not None and self.usb is None:
+            raise ValueError("'serial' only applies to usb devices")
         return self
 
     @property
     def bus(self) -> str:
-        return "usb" if self.usb else "pci"
+        return "usb" if self.usb else "pci" if self.pci else "alsa"
 
     @property
     def hwid(self) -> str:
-        return self.usb or self.pci  # type: ignore[return-value]
+        return self.usb or self.pci or self.alsa  # type: ignore[return-value]
 
 
 # --- Rig -----------------------------------------------------------------

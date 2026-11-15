@@ -5,8 +5,9 @@ the MOD/modep graphical patchbay.
 
 ## Status
 
-Design settled (2026-11-15). Phases 1 (schema, validation, plugin discovery)
-and 2 (daemon, jalv backend, hardware resolution, reconciler) implemented.
+Design settled (2026-11-15). Phases 1 (schema, validation, plugin discovery),
+2 (daemon, jalv backend, hardware resolution, reconciler) and 3 (MIDI:
+hardware resolution, CC mapping, discovery tools) implemented.
 
 ## Motivation
 
@@ -89,7 +90,10 @@ spec:
   pci: "8086:a171"        # from lspci
 ```
 
-Exactly one of `usb` or `pci` is required.
+Exactly one of `usb`, `pci` or `alsa` is required. `alsa: pisound` is the
+ALSA card id from `/proc/asound/cards`. Use it for cards with no USB or PCI
+ID: I2S HATs like Pisound, onboard codecs, virtual cards. `serial` applies
+only to `usb`.
 
 **Endpoint selectors.** One card can expose several PipeWire endpoints. A
 laptop's HDA controller, for example, has Speaker, HDMI1–3, Mic1 and Mic2.
@@ -116,8 +120,28 @@ on `device.bus` + `device.vendor.id`/`device.product.id` (+ `device.serial`;
 the bare serial or udev's `Vendor_Model_SERIAL` form both match), then the
 node, then its physical non-monitor ports in `port.id` order. The JACK name
 is `<node.description>:<port.name>`. Under plain jackd, device edges are
-Unresolved, while plugins and plugin-to-plugin edges still work. MIDI
-hardware resolution lands in phase 3.
+Unresolved, while plugins and plugin-to-plugin edges still work.
+
+**MIDI ports.** One physical device is found across two sources, joined on
+the ALSA card number:
+
+- the PipeWire Device, which carries `api.alsa.card`
+- the sysfs card, `/sys/class/sound/cardN` with its `device` link walked up to
+  `idVendor`/`idProduct`/`serial` or the PCI `vendor`/`device`
+
+sysfs matters because a MIDI-only controller has no PCM, so PipeWire creates
+no Device object for it.
+
+- **Port list:** the device's MIDI ports are the ALSA sequencer ports whose
+  client has that `card_id` (via alsa-midi), sorted by client:port.
+  `midi_capture_<n>` is the n-th readable port and `midi_playback_<n>` the
+  n-th writable one.
+- **Fallback:** without the sequencer API, the kernel's numbering is used:
+  client = 16 + 4·card + i (`seq_clientmgr.c`).
+- **JACK names:** from PipeWire's sequencer bridge, whose ports have
+  `object.path = alsa:seq:…:client_C:capture_P`. The name is
+  `<bridge node.name>:<port.name>`, e.g.
+  `Midi-Bridge:MIDI Mix MIDI 1 (capture)`.
 
 **Canonical device port names** (r7s maps these to real ports):
 
@@ -179,8 +203,8 @@ spec:
   label (for enumerations).
 - **MIDI CC mapping** goes inline on the parameter: `cc` (0–127), `channel`
   (1–16, omitted = omni), `device` (Device alias), and optional `min`/`max`,
-  which default to the port's range. `r7sd` does the mapping itself through
-  its own JACK MIDI client, since jalv has no CC mapping.
+  which default to the port's range. `r7sd` does the mapping itself, since
+  jalv has none. See "MIDI CC mapping" below.
 - **Endpoints** are `<plugin-id | device-alias>:<port>` or an inline hardware
   reference. Plugin ids must not collide with device aliases. Ids are at
   most 48 characters, because the JACK client is `r7s-<id>` and JACK caps
@@ -263,6 +287,35 @@ spec:
   - `r7sctl snapshot RIG` prints the active rig with live values, to write
     back to YAML.
 
+### MIDI CC mapping
+
+- **Input path:** r7sd's own ALSA sequencer client (`r7sd:cc-in`) subscribes
+  to each mapped device's MIDI inputs, alongside PipeWire. This deliberately
+  isn't a JACK MIDI client: a Python callback in the realtime graph would
+  turn any GC pause or GIL wait into an xrun for the whole rig. Off the
+  graph, a stall only delays a knob.
+- **Routes:** each pass, the reconciler rebuilds routes as (sequencer source,
+  channel or omni, cc) → (plugin, symbol, scaling) from the active rig, and
+  the router thread syncs its subscriptions to match. An unplugged or
+  replugged controller drops out of or rejoins the route set on its own.
+- **Scaling** maps 0–127 onto `min`..`max`, which default to the port's range:
+  - linear by default
+  - logarithmic for ports marked `logarithmic` with a positive range
+  - integer ports round
+  - toggles: ≥ 64 is on
+  - enumerations step through the scale points inside the range
+- **Floods are coalesced.** A batch of pending events sends only the latest
+  value per parameter: a 128-message sweep became 2 `set`s in testing.
+- **Semantics:** a CC sets the parameter's *live* value but not its
+  *applied* value (see Drift policy), so later reconcile passes never revert
+  it. A spec edit still wins, and `snapshot` captures the CC'd values.
+- **Mappings don't filter MIDI connections.** A `midi:` connection from the
+  same device still forwards every message, mapped CCs included. Map CC 7
+  (channel volume) to a parameter while that controller also feeds a synth,
+  and the synth's volume moves too. The end-to-end test hit exactly this.
+  Pick CCs the synth ignores, or a channel it doesn't listen on. A per-edge
+  filter could come later.
+
 ### Graph ownership
 
 r7s manages only what it created: its plugin clients and the connections it
@@ -335,8 +388,14 @@ or browser is also using the audio stack.
   - Parameters name control input ports, and values are in range (or a valid
     scale-point label).
   - CC maps target control inputs.
-- **Device checks**, from the live JACK graph and sysfs (phase 3): devices are
-  present and the referenced ports exist.
+- **Hardware checks**, from PipeWire, sysfs and the ALSA sequencer. These are
+  always warnings, never errors, because the rig waits for the hardware.
+  They cover Devices in the input, plus stored Devices an incoming Rig uses,
+  and only the sides some rig actually uses (audio capture or playback, MIDI
+  in or out, or MIDI in for a CC mapping). They warn about:
+  - a device that isn't connected
+  - an ambiguous endpoint
+  - a device with no MIDI inputs used for CC
 
 ```bash
 r7sctl validate -f rig.yaml          # tier 1 only, runs anywhere
@@ -386,9 +445,9 @@ r7sctl status                               # daemon, JACK, backend health
 
 # Hardware discovery (phases 2–3)
 r7sctl audio ports [-o yaml]                # yaml: ready-to-apply Devices
-r7sctl midi devices
-r7sctl midi listen <device>
-r7sctl midi sniff --timeout 30s
+r7sctl midi devices [-o yaml]               # yaml: ready-to-apply Devices
+r7sctl midi listen TARGET [--as alias]      # TARGET: usb/…, alsa/ID, card id, CLIENT:PORT
+r7sctl midi sniff --timeout 30s             # summary of every CC you touched
 
 # Observability (phase 4)
 r7sctl logs [--follow] [--since ...] [--unit plugin/amp] [--priority err]
@@ -472,7 +531,8 @@ running under systemd it falls back to an append-only JSON-lines file.
    `plugins` and `validate` commands.
 2. r7sd API and state store, jalv backend, device port resolution,
    incremental reconciler, and `apply`/`get`/`describe`/`diff`/`delete`/`snapshot`.
-3. Tier-2 device checks, MIDI CC mapping, and `midi listen`/`sniff`.
+3. Tier-2 hardware checks, MIDI hardware resolution, CC mapping, and
+   `midi devices`/`listen`/`sniff`.
 4. Structured logs (journal/JSON), xrun events, `logs`, and `system-check`.
 5. Web UI, then udev hotplug handling.
 
@@ -493,3 +553,7 @@ running under systemd it falls back to an append-only JSON-lines file.
 | Structural changes | Incremental reconcile |
 | Web UI | Plugin nodes with port-labeled edges, a port-view toggle, read-only |
 | LV2 metadata | Pure-Python TTL parsing (rdflib), with lilv as an optional fast path |
+| Devices without USB/PCI IDs | `alsa:` card id (Pisound, onboard, virtual) |
+| CC input path | ALSA sequencer, not a JACK MIDI client, to stay out of the RT graph |
+| Hardware backend | PipeWire only in v1 (jackd: plugins work, device edges don't) |
+| Endpoint ambiguity | Optional `capture:`/`playback:` selectors on Device |

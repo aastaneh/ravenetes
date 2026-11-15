@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 dependencies = [
+    "alsa-midi>=1.0",
     "click>=8.1",
     "jack-client>=0.5.4",
     "pydantic>=2.9",

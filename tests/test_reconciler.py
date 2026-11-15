@@ -2,6 +2,7 @@ import yaml
 import pytest
 
 from r7s.backend.fake import FakeBackend
+from r7s.hw.inventory import Hardware
 from r7s.hw.pipewire import HwGraph, PipeWireError
 from r7s.jackgraph import FakeGraph
 from r7s.lv2.world import PluginWorld
@@ -39,6 +40,8 @@ class Rig:
         self.backend = FakeBackend(self.world, self.graph)
         self.clock = Clock()
         self.hw_fail = False
+        self.cards = None  # sysfs cards (None: unknown)
+        self.seq = None  # sequencer ports (None: unknown)
         self.r = Reconciler(
             self.store,
             make_backend=lambda res: self.backend,
@@ -51,7 +54,7 @@ class Rig:
     def snapshot(self):
         if self.hw_fail:
             raise PipeWireError("pw-dump not found")
-        return HwGraph.from_dump(self.hw_dump)
+        return Hardware(HwGraph.from_dump(self.hw_dump), self.cards, self.seq)
 
     def plug_scarlett(self, on: bool):
         client = "Scarlett 2i2 USB Analog Stereo"
