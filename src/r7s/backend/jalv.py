@@ -37,9 +37,9 @@ def find_jalv(configured: str | None = None) -> str | None:
     return None
 
 
-def jalv_version(path: str) -> tuple[int, ...] | None:
+def jalv_version(path: str, cwd: Path | None = None) -> tuple[int, ...] | None:
     try:
-        out = subprocess.run([path, "-V"], capture_output=True, text=True, timeout=5).stdout
+        out = subprocess.run([path, "-V"], capture_output=True, text=True, timeout=5, cwd=cwd).stdout
     except (OSError, subprocess.TimeoutExpired):
         return None
     m = re.search(r"jalv (\d+)\.(\d+)\.(\d+)", out)
@@ -199,7 +199,9 @@ class JalvBackend:
                     if d.is_dir() and not d.is_symlink():
                         clear_empty_temp_dirs(d)
         self.plugin_paths = [os.path.expanduser(p) for p in plugin_paths]
-        self.version = jalv_version(self.exe) if self.exe else None
+        # Run the version probe in the work dir too: nothing jalv-related
+        # should ever touch the directory r7sd happens to be started from.
+        self.version = jalv_version(self.exe, work_dir) if self.exe else None
         self.patched = bool(self.exe and is_patched(self.exe))
 
     def problems(self) -> list[str]:

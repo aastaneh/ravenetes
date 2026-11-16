@@ -27,8 +27,10 @@ def _pwd_jalv(tmp_path):
     """A fake jalv that records its cwd, makes a temp dir like jalv does, and
     (like real jalv) leaves it behind on exit."""
     fake = tmp_path / "jalv"
-    # jalv's own pattern is "jalv" + 6 chars (zix_create_temporary_directory "jalvXXXXXX")
-    fake.write_text('#!/bin/sh\npwd > .cwd\nmkdir "$(printf jalv%06d $(($$ % 1000000)))"\nread line\n')
+    # Like real jalv: -V prints the version and exits without creating
+    # anything; otherwise make "jalv" + 6 chars (zix's "jalvXXXXXX") in cwd.
+    fake.write_text('#!/bin/sh\n[ "$1" = -V ] && { echo "jalv 1.8.0"; exit 0; }\n'
+                    'pwd > .cwd\nmkdir "$(printf jalv%06d $(($$ % 1000000)))"\nread line\n')
     fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
     return str(fake)
 
@@ -97,3 +99,23 @@ def test_start_clears_a_crashed_predecessors_leftovers(tmp_path):
     inst = b.start(InstanceSpec("drums", "urn:x"), {})
     assert not (d / "jalvDEAD01").exists()
     inst.stop(timeout=1)
+
+
+def test_nothing_lands_in_the_callers_cwd(tmp_path, monkeypatch):
+    """Regression: the version probe used to run in r7sd's cwd (the repo, in
+    development), where a jalv that creates temp dirs left them behind."""
+    from r7s.backend.jalv import JalvBackend
+
+    caller = tmp_path / "caller"
+    caller.mkdir()
+    monkeypatch.chdir(caller)
+    leaky = tmp_path / "leaky-jalv"   # a jalv that makes a temp dir even for -V
+    leaky.write_text('#!/bin/sh\nmkdir "$(printf jalv%06d $(($$ % 1000000)))"\n'
+                     '[ "$1" = -V ] && { echo "jalv 1.8.0"; exit 0; }\nread line\n')
+    leaky.chmod(leaky.stat().st_mode | stat.S_IEXEC)
+    b = JalvBackend([], jalv_path=str(leaky), work_dir=tmp_path / "work")
+    inst = b.start(InstanceSpec("x", "urn:x"), {})
+    time.sleep(0.2)
+    inst.stop(timeout=1)
+    assert list(caller.iterdir()) == []
+    assert b.version == (1, 8, 0)
