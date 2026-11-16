@@ -77,6 +77,7 @@ class JalvInstance:
     def __init__(self, exe: str, spec: InstanceSpec, params: dict[str, float], env: dict[str, str],
                  cwd: str | None = None):
         self.spec = spec
+        self.cwd = Path(cwd) if cwd else None
         args = [exe, "-n", spec.client, "-x"]
         for sym, val in params.items():
             args += ["-c", f"{sym}={_fmt(val)}"]
@@ -170,6 +171,10 @@ class JalvInstance:
                 except OSError:
                     pass
         log.info("stopped %s (rc %s)", self.spec.client, self._proc.returncode)
+        # jalv leaves its temp dir behind even on a clean quit. This instance
+        # has exited and nothing else runs in its directory, so clear it.
+        if self.cwd is not None and self.cwd.is_dir():
+            clear_empty_temp_dirs(self.cwd)
 
     def output_tail(self, n: int = 20) -> list[str]:
         return list(self._tail)[-n:]
@@ -180,12 +185,19 @@ class JalvBackend:
 
     def __init__(self, plugin_paths: list[str], jalv_path: str | None = None, work_dir: Path | None = None):
         self.exe = find_jalv(jalv_path)
-        # jalv makes a jalvXXXXXX temp dir in its working directory and only
-        # removes it on a clean exit; keep those out of wherever r7sd runs.
+        # jalv makes a jalvXXXXXX temp dir in its working directory and leaves
+        # it behind (even on a clean quit). Each plugin runs in its own
+        # <work_dir>/plugins/<id>, cleared whenever that plugin starts or
+        # stops; at backend start, clear leftovers from earlier daemons too.
         self.work_dir = work_dir
         if work_dir is not None:
             work_dir.mkdir(parents=True, exist_ok=True)
-            clear_empty_temp_dirs(work_dir)
+            clear_empty_temp_dirs(work_dir)  # pre-per-plugin layout
+            plugins = work_dir / "plugins"
+            if plugins.is_dir():
+                for d in plugins.iterdir():
+                    if d.is_dir() and not d.is_symlink():
+                        clear_empty_temp_dirs(d)
         self.plugin_paths = [os.path.expanduser(p) for p in plugin_paths]
         self.version = jalv_version(self.exe) if self.exe else None
         self.patched = bool(self.exe and is_patched(self.exe))
@@ -217,4 +229,13 @@ class JalvBackend:
         if spec.bundle:
             paths.insert(0, str(Path(spec.bundle).parent))
         env["LV2_PATH"] = ":".join(paths)
-        return JalvInstance(self.exe, spec, params, env, str(self.work_dir) if self.work_dir else None)
+        cwd = None
+        if self.work_dir is not None:
+            d = self.work_dir / "plugins" / spec.id
+            d.mkdir(parents=True, exist_ok=True)
+            # Only one instance per plugin id runs at a time (the reconciler
+            # stops the old one first), so anything here is from a previous
+            # instance, e.g. one that crashed and never reached stop().
+            clear_empty_temp_dirs(d)
+            cwd = str(d)
+        return JalvInstance(self.exe, spec, params, env, cwd)
