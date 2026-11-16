@@ -76,3 +76,8 @@ def test_example_rig_is_tier1_valid():
     res = run("validate", "-f", "examples/rig")
     assert res.exit_code == 0, res.output
     assert parse  # keep import used
+
+
+def test_beatstep_example_is_tier1_valid():
+    res = run("validate", "-f", "examples/beatstep-303/rig.yaml")
+    assert res.exit_code == 0, res.output

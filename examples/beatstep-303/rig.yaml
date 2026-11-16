@@ -1,0 +1,72 @@
+# A Beatstep Pro driving a TB-303-style synth and a drum sampler, through a
+# reverb into laptop speakers. Knobs 1-6 (Control mode, MIDI channel 11)
+# are mapped to the synth's filter and the reverb mix.
+#
+#   r7sctl validate --live -f examples/beatstep-303/rig.yaml
+#   r7sctl apply -f examples/beatstep-303/rig.yaml --wait
+#
+# Needs: dpf-plugins-lv2 (Nekobi), zam-plugins (ZamVerb), x42-plugins
+# (MIDI channel filter), drumlabooh in ~/.lv2, hydrogen-drumkits, and a
+# drumlabooh preset of your own (see README: "Plugins with state").
+apiVersion: r7s/v1
+kind: Device
+metadata: {name: pro}
+spec: {usb: "1c75:0287"}            # Arturia BeatStep Pro, from `r7sctl midi devices -o yaml`
+---
+apiVersion: r7s/v1
+kind: Device
+metadata: {name: speakers}
+spec:
+  pci: "8086:51c8"                  # laptop sound card, from `r7sctl audio ports -o yaml`
+  playback: Speaker                 # the card has several outputs; pick the speakers
+---
+apiVersion: r7s/v1
+kind: Rig
+metadata: {name: beatstep-303}
+spec:
+  plugins:
+    - id: synth
+      lv2: "http://distrho.sf.net/plugins/Nekobi"
+      parameters:
+        # value = starting point; cc/channel/device = which knob moves it
+        cutoff:    {value: 40, cc: 10, channel: 11, device: pro}
+        resonance: {value: 25, cc: 74, channel: 11, device: pro, max: 95}
+        env_mod:   {value: 50, cc: 71, channel: 11, device: pro}
+        decay:     {value: 75, cc: 76, channel: 11, device: pro}
+        accent:    {value: 25, cc: 77, channel: 11, device: pro}
+    - id: verb
+      lv2: "urn:zamaudio:ZamVerb"
+      parameters:
+        master: -12                 # dB: keeps the whole mix at a sane level
+        room: 3
+        wetdry: {value: 30, cc: 93, channel: 11, device: pro, max: 60}
+
+    # One MIDI cable carries every Beatstep track; filters split them by channel.
+    - id: ch1                       # sequencer 1 -> synth
+      lv2: "http://gareus.org/oss/lv2/midifilter#onechannelfilter"
+      parameters: {channel: 1}
+    - id: ch10                      # drum sequencer -> drums
+      lv2: "http://gareus.org/oss/lv2/midifilter#onechannelfilter"
+      parameters: {channel: 10}
+    - id: drums
+      lv2: "https://github.com/psemiletov/drumlabooh"
+      preset: my-drum-kit           # a preset you saved with your kit chosen (label or URI)
+
+  connections:
+    midi:
+      - {from: "pro:midi_capture", to: "ch1:midiin"}
+      - {from: "ch1:midiout",      to: "synth:lv2_events_in"}
+      - {from: "pro:midi_capture", to: "ch10:midiin"}
+      - {from: "ch10:midiout",     to: "drums:in"}
+    audio:
+      - {from: "synth:lv2_audio_out_1", to: "verb:lv2_audio_in_1"}   # mono synth into both sides
+      - {from: "synth:lv2_audio_out_1", to: "verb:lv2_audio_in_2"}
+      - {from: "drums:audio_out_1",     to: "verb:lv2_audio_in_1"}   # summed with the synth
+      - {from: "drums:audio_out_2",     to: "verb:lv2_audio_in_2"}
+      - {from: "verb:lv2_audio_out_1",  to: "speakers:playback_l"}
+      - {from: "verb:lv2_audio_out_2",  to: "speakers:playback_r"}
+---
+apiVersion: r7s/v1
+kind: ActiveRig
+metadata: {name: current}
+spec: {rig: beatstep-303}
