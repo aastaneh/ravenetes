@@ -50,12 +50,32 @@ def is_patched(path: str) -> bool:
     return (Path(path).resolve().parent.parent / "share" / "r7s-jalv" / "PATCHED").is_file()
 
 
+JALV_TEMP_RE = re.compile(r"^jalv[A-Za-z0-9]{6}$")
+
+
+def clear_empty_temp_dirs(work_dir: Path) -> list[Path]:
+    """Remove jalv temp dirs left by killed instances: only in r7s's own work
+    dir, only exact jalvXXXXXX names, only real (non-symlink) directories,
+    and only if empty (rmdir refuses anything else)."""
+    removed = []
+    for entry in work_dir.iterdir():
+        if not JALV_TEMP_RE.match(entry.name) or entry.is_symlink() or not entry.is_dir():
+            continue
+        try:
+            entry.rmdir()
+            removed.append(entry)
+        except OSError:
+            pass  # not empty: leave it
+    return removed
+
+
 def _fmt(v: float) -> str:
     return f"{v:.9g}"
 
 
 class JalvInstance:
-    def __init__(self, exe: str, spec: InstanceSpec, params: dict[str, float], env: dict[str, str]):
+    def __init__(self, exe: str, spec: InstanceSpec, params: dict[str, float], env: dict[str, str],
+                 cwd: str | None = None):
         self.spec = spec
         args = [exe, "-n", spec.client, "-x"]
         for sym, val in params.items():
@@ -82,6 +102,7 @@ class JalvInstance:
                 text=True,
                 bufsize=1,
                 env=env,
+                cwd=cwd,
             )
         except OSError as e:
             raise BackendError(f"cannot start jalv: {e}") from e
@@ -157,8 +178,14 @@ class JalvInstance:
 class JalvBackend:
     name = "jalv"
 
-    def __init__(self, plugin_paths: list[str], jalv_path: str | None = None):
+    def __init__(self, plugin_paths: list[str], jalv_path: str | None = None, work_dir: Path | None = None):
         self.exe = find_jalv(jalv_path)
+        # jalv makes a jalvXXXXXX temp dir in its working directory and only
+        # removes it on a clean exit; keep those out of wherever r7sd runs.
+        self.work_dir = work_dir
+        if work_dir is not None:
+            work_dir.mkdir(parents=True, exist_ok=True)
+            clear_empty_temp_dirs(work_dir)
         self.plugin_paths = [os.path.expanduser(p) for p in plugin_paths]
         self.version = jalv_version(self.exe) if self.exe else None
         self.patched = bool(self.exe and is_patched(self.exe))
@@ -190,4 +217,4 @@ class JalvBackend:
         if spec.bundle:
             paths.insert(0, str(Path(spec.bundle).parent))
         env["LV2_PATH"] = ":".join(paths)
-        return JalvInstance(self.exe, spec, params, env)
+        return JalvInstance(self.exe, spec, params, env, str(self.work_dir) if self.work_dir else None)

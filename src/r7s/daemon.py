@@ -149,9 +149,9 @@ def make_world(res: LoadResult) -> PluginWorld:
     return PluginWorld.load(paths, extra_bundles=rig_bundles(res))
 
 
-def make_backend(res: LoadResult) -> JalvBackend:
+def make_backend(res: LoadResult, work_dir: Path | None = None) -> JalvBackend:
     cfg = _config(res)
-    return JalvBackend(resolve_plugin_paths((), res).paths, cfg.jalv_path if cfg else None)
+    return JalvBackend(resolve_plugin_paths((), res).paths, cfg.jalv_path if cfg else None, work_dir)
 
 
 def backend_key(res: LoadResult):
@@ -225,7 +225,7 @@ def main(argv: list[str] | None = None) -> None:
 
     reconciler = Reconciler(
         store,
-        make_backend=make_backend,
+        make_backend=lambda res: make_backend(res, args.state_dir / "jalv"),
         make_graph=lambda cb: JackGraph("r7sd", on_change=cb),
         make_world=make_world,
         hw_snapshot=inventory.snapshot,
