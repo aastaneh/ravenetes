@@ -1,5 +1,17 @@
 # Ravenetes (r7s)
 
+> [!WARNING]
+> **Use at your own risk.**
+>
+> - **Active development:** things will change and break.
+> - **Vibe coded:** this software was written entirely with AI assistance. I
+>   built it for my own enjoyment.
+> - **Live use:** don't rely on it for a live performance or gig until you've
+>   tested your exact rig, on your exact hardware, yourself.
+>
+> It comes **as-is, with no warranty of any kind**. You use it at your own
+> risk.
+
 **Declare your audio rig in YAML. r7s makes it real and keeps it that way.**
 
 r7s is a Kubernetes-style host for LV2 plugins on Linux. You describe the
@@ -538,3 +550,10 @@ plus small LV2 fixture bundles, so they run anywhere.
 | `examples/` | example rigs |
 | `third_party/jalv/` | patched jalv build, and upstream bug write-ups |
 | `packaging/systemd/` | the `r7sd` user service |
+
+---
+
+## License
+
+[MIT](LICENSE). The patches in `third_party/jalv/` modify jalv, which is
+ISC-licensed.
