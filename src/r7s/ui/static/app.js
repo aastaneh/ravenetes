@@ -84,6 +84,7 @@ function connect() {
   es.addEventListener("open", () => { live.className = "live on"; live.title = "Live"; });
   es.addEventListener("error", () => { live.className = "live off"; live.title = "Disconnected; retrying"; });
   es.addEventListener("status", schedule);
+  es.addEventListener("params", (m) => applyParams(JSON.parse(m.data)));
   es.addEventListener("event", (m) => {
     const ev = JSON.parse(m.data);
     const head = state.events[0];
@@ -358,6 +359,48 @@ function select(id) {
   render();
 }
 
+// Position of the live value inside its range, for the little bar.
+function fraction(p) {
+  if (p.liveRaw === null || p.liveRaw === undefined || p.min === null || p.max === null || p.max === p.min) return null;
+  return Math.min(1, Math.max(0, (p.liveRaw - p.min) / (p.max - p.min)));
+}
+function setBar(cell, p) {
+  const f = fraction(p);
+  const bar = cell.querySelector(".meter");
+  bar.hidden = f === null;
+  if (f !== null) bar.firstChild.style.width = `${(f * 100).toFixed(1)}%`; // CSSOM: allowed by the CSP
+}
+function styleParamRow(tr, p) {
+  tr.className = [p.drift ? "drift" : "", p.inSpec ? "" : "unset"].join(" ").trim();
+  tr.title = p.drift ? `live ${p.liveRaw} differs from the spec value ${p.applied} (a knob or plugin UI moved it)` : "";
+}
+
+// Live parameter pushes (knobs, applies): patch the model, and the open
+// panel's cells in place: no graph re-render, so this can run at 20 Hz.
+function applyParams(changes) {
+  const g = state.graph;
+  if (!g) return;
+  for (const c of changes) {
+    const node = g.nodes.find((n) => n.id === `p:${c.plugin}`);
+    const p = node && node.params && node.params.find((x) => x.symbol === c.symbol);
+    if (!p) continue;
+    p.liveRaw = c.value;
+    p.live = c.shown;
+    p.drift = p.applied !== null && p.applied !== undefined && Math.abs(c.value - p.applied) > 1e-6;
+    node.drift = node.params.filter((x) => x.drift).length;
+    if (state.selected !== node.id) continue;
+    const tr = document.querySelector(`#panel-body tr[data-sym="${CSS.escape(c.symbol)}"]`);
+    if (!tr) continue;
+    const cell = tr.querySelector("td.live");
+    cell.querySelector(".v").textContent = fmtNum(p.live);
+    setBar(cell, p);
+    styleParamRow(tr, p);
+    tr.classList.remove("moved");
+    void tr.offsetWidth; // restart the flash animation
+    tr.classList.add("moved");
+  }
+}
+
 function kv(pairs) {
   const dl = el("dl", { class: "kv" });
   for (const [k, v, cls] of pairs) {
@@ -396,14 +439,18 @@ function renderPanel() {
       t.append(el("thead", {}, null), el("tbody"));
       t.tHead.append(head);
       for (const p of n.params) {
-        const tr = el("tr", { class: [p.drift ? "drift" : "", p.inSpec ? "" : "unset"].join(" ").trim() || null,
-                              title: p.drift ? `live ${p.liveRaw} differs from the applied spec value ${p.applied}` : null });
+        const tr = el("tr", { "data-sym": p.symbol });
+        styleParamRow(tr, p);
         const name = el("td", {}, p.name || p.symbol);
         if (p.cc) name.append(el("span", { class: "cc", title: `CC ${p.cc.cc} ch ${p.cc.channel ?? "omni"} from ${p.cc.device}` }, `CC${p.cc.cc}`));
         const unit = p.unit ? ` ${p.unit}` : "";
         const range = p.labels ? p.labels.join(" | ") : p.toggle ? "toggle" :
           (p.min !== null || p.max !== null) ? `${fmtNum(p.min)} … ${fmtNum(p.max)}${unit}` : "";
-        tr.append(name, el("td", { class: "num" }, fmtNum(p.live)), el("td", { class: "num" }, p.inSpec ? fmtNum(p.spec) : "default"),
+        const live = el("td", { class: "num live" });
+        live.append(el("span", { class: "v" }, fmtNum(p.live)), el("span", { class: "meter" }, null));
+        live.lastChild.append(el("i"));
+        setBar(live, p);
+        tr.append(name, live, el("td", { class: "num" }, p.inSpec ? fmtNum(p.spec) : "default"),
                   el("td", { class: "muted" }, range));
         t.tBodies[0].append(tr);
       }

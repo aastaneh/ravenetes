@@ -13,11 +13,12 @@ import json
 import logging
 import socket
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from urllib.parse import parse_qs, urlparse
 
-from .model import build_graph
+from .model import _shown, build_graph
 
 log = logging.getLogger(__name__)
 
@@ -69,6 +70,57 @@ class Broadcaster:
     def clients(self) -> int:
         with self._lock:
             return len(self._clients)
+
+
+class ParamFeed:
+    """Batches live parameter changes for the UI: at most one "params" message
+    per interval, carrying only the latest value of each changed parameter,
+    so a fast knob sweep can't flood browsers but the final position always
+    arrives."""
+
+    def __init__(self, broadcaster: Broadcaster, display=None, interval: float = 0.05):
+        self.broadcaster = broadcaster
+        self.display = display or (lambda pid, sym, v: v)
+        self.interval = interval
+        self._lock = threading.Lock()
+        self._pending: dict[tuple[str, str], float] = {}
+        self._wake = threading.Event()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def push(self, plugin: str, symbol: str, value: float) -> None:
+        with self._lock:
+            self._pending[(plugin, symbol)] = value
+        self._wake.set()
+
+    def flush(self) -> list[dict]:
+        with self._lock:
+            batch, self._pending = self._pending, {}
+        if not batch:
+            return []
+        msg = [{"plugin": p, "symbol": s, "value": round(v, 6), "shown": self.display(p, s, v)}
+               for (p, s), v in batch.items()]
+        self.broadcaster.publish("params", msg)
+        return msg
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            self._wake.wait(timeout=1.0)
+            self._wake.clear()
+            if self._stop.is_set():
+                break
+            self.flush()
+            time.sleep(self.interval)  # rate limit; values arriving meanwhile coalesce
+
+    def start(self) -> None:
+        self._thread = threading.Thread(target=self._run, name="ui-params", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._wake.set()
+        if self._thread:
+            self._thread.join(timeout=2)
 
 
 def _loopback(host: str) -> bool:
@@ -241,3 +293,13 @@ class UiServer:
             self._server.shutdown()
             self._server.server_close()
             self._server = None
+
+
+def display_value(reconciler):
+    """(plugin, symbol, value) -> what the UI shows: label, bool, int or number."""
+    def show(pid: str, sym: str, value: float):
+        d = reconciler.desired
+        want = d.plugins.get(pid) if d else None
+        port = want.plugin.port(sym) if want and want.plugin else None
+        return _shown(port, value) if port is not None else round(value, 4)
+    return show

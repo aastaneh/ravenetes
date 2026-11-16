@@ -116,6 +116,9 @@ class Reconciler:
         self._last_change = -1e9  # clock() of the last plugin start/stop or re-cable
         self.pass_hooks: list[Callable[[LoadResult], None]] = []  # run each pass, on this thread
         self.status_listeners: list[Callable[[dict], None]] = []  # after each status publish
+        # (plugin, symbol, value) for every parameter value r7s sends, from
+        # the spec or a MIDI CC. Called on the sending thread: keep it cheap.
+        self.param_listeners: list[Callable[[str, str, float], None]] = []
         self.log_cc_values = False  # Config spec.log.midiCC
         self._make_sink = make_sink
         self._log_backend: str | None = None
@@ -329,6 +332,7 @@ class Reconciler:
                         m.applied[sym] = val
                         m.live[sym] = val
                         self.event("plugin", "ParameterSet", f"plugin/{pid}", f"{sym} = {val:g}")
+                        self._notify_param(pid, sym, val)
                     except BackendError as e:
                         self.event("plugin", "ParameterFailed", f"plugin/{pid}", f"{sym}: {e}")
                         break
@@ -581,9 +585,17 @@ class Reconciler:
             return
         m.instance.set_param(symbol, value)
         m.live[symbol] = value
+        self._notify_param(plugin_id, symbol, value)
         if self.log_cc_values:
             self.event("midi", "CcValue", f"plugin/{plugin_id}", f"{symbol} = {value:g}",
                        symbol=symbol, value=round(value, 6))
+
+    def _notify_param(self, plugin_id: str, symbol: str, value: float) -> None:
+        for fn in self.param_listeners:
+            try:
+                fn(plugin_id, symbol, value)
+            except Exception:
+                log.debug("param listener failed", exc_info=True)
 
     def _midi_status(self) -> dict:
         r = self.cc_router

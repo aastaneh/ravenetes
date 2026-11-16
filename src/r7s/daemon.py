@@ -28,7 +28,7 @@ from .eventlog import EventLog, choose_sink
 from .midi_cc import CcRouter
 from .schema import UiSpec
 from .hw.uevent import UeventMonitor
-from .ui.server import UiServer
+from .ui.server import ParamFeed, UiServer, display_value
 from .lv2.world import PluginWorld
 from .reconciler import Reconciler
 from .store import Store, default_state_dir
@@ -240,6 +240,9 @@ def main(argv: list[str] | None = None) -> None:
     reconciler.log.listeners.append(lambda r: ui.broadcaster.publish("event", r.to_dict()))
     reconciler.status_listeners.append(
         lambda st: ui.broadcaster.publish("status", {"revision": st.get("revision"), "passes": st.get("passes")}))
+    params_feed = ParamFeed(ui.broadcaster, display_value(reconciler))
+    reconciler.param_listeners.append(params_feed.push)
+    params_feed.start()
     ui_error = [None]
 
     def ui_hook(res: LoadResult) -> None:
@@ -282,6 +285,7 @@ def main(argv: list[str] | None = None) -> None:
         server.serve_forever(poll_interval=0.5)
     finally:
         reconciler.event("system", "Stopping", "r7sd", "shutting down")
+        params_feed.stop()
         ui.stop()
         hotplug.stop()
         reconciler.shutdown()
