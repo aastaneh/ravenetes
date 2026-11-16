@@ -87,3 +87,11 @@ def test_listen_changes_and_bind_failure(ui):
     assert srv.ensure(True, taken) is None and "can't listen" in srv.error
     assert srv.ensure(True, taken) is None  # no retry storm on the same bad config
     other.stop()
+
+
+def test_hidden_attribute_always_hides():
+    # Regression: .empty { display: grid } overrode [hidden], leaving an
+    # invisible overlay over the graph that ate every click.
+    from importlib import resources
+    css = resources.files("r7s.ui").joinpath("static", "app.css").read_text()
+    assert "[hidden] { display: none !important; }" in css
