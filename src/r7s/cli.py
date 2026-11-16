@@ -183,9 +183,11 @@ def _lookup(world: PluginWorld, uri: str) -> Plugin:
 @_plugin_path_option
 def plugins_inspect(uri, output, plugin_paths, no_cache) -> None:
     """Show every port of a plugin. Accepts a URI or an unambiguous search."""
-    plugin = _lookup(_world(plugin_paths, no_cache), uri)
+    world = _world(plugin_paths, no_cache)
+    plugin = _lookup(world, uri)
+    presets = world.presets_for(plugin.uri)
     if output == "json":
-        click.echo(json.dumps(plugin.to_dict(), indent=2))
+        click.echo(json.dumps({**plugin.to_dict(), "presets": [p.to_dict() for p in presets]}, indent=2))
         return
     if output == "yaml":
         click.echo(yaml.safe_dump(plugin.to_dict(), sort_keys=False), nl=False)
@@ -195,6 +197,11 @@ def plugins_inspect(uri, output, plugin_paths, no_cache) -> None:
     click.echo(f"Category:  {', '.join(plugin.classes) or '-'}")
     click.echo(f"Bundle:    {plugin.bundle}")
     click.echo(f"Native UI: {', '.join(plugin.ui_types) or 'none'}")
+    if presets:
+        click.echo("\nPresets (use as  preset: <label or URI>):")
+        for p in presets:
+            note = f"  [unreadable: {p.error}]" if p.error else ""
+            click.echo(f"  {p.label or '(no label)'}  {p.uri}{note}")
     for type_, direction, title in (
         ("audio", "input", "Audio inputs"),
         ("audio", "output", "Audio outputs"),
@@ -230,11 +237,12 @@ def plugins_inspect(uri, output, plugin_paths, no_cache) -> None:
 @_plugin_path_option
 def plugins_scaffold(uri, plugin_id, output, plugin_paths, no_cache) -> None:
     """Print a ready-to-paste spec.plugins entry with defaults and ranges."""
-    plugin = _lookup(_world(plugin_paths, no_cache), uri)
+    world = _world(plugin_paths, no_cache)
+    plugin = _lookup(world, uri)
     if output == "json":
         click.echo(json.dumps(scaffold_dict(plugin, plugin_id), indent=2))
     else:
-        click.echo(scaffold_yaml(plugin, plugin_id), nl=False)
+        click.echo(scaffold_yaml(plugin, plugin_id, presets=world.presets_for(plugin.uri)), nl=False)
 
 
 # --- validate ------------------------------------------------------------

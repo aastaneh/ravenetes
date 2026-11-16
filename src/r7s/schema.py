@@ -172,6 +172,9 @@ class PluginSpec(Model):
     vst3: str | None = None
     clap: str | None = None
     bundle: str | None = None
+    # A preset of this plugin, by label or URI: restores state that isn't a
+    # simple control (sample paths, kits, IRs); values in `parameters` win.
+    preset: str | None = None
     ui: bool | None = None
     parameters: dict[str, ParamValue] = Field(default_factory=dict)
 
@@ -182,6 +185,8 @@ class PluginSpec(Model):
             raise ValueError("set exactly one plugin format: 'lv2', 'vst3', or 'clap'")
         if self.bundle is not None and self.lv2 is None:
             raise ValueError("'bundle' only applies to lv2 plugins")
+        if self.preset is not None and self.lv2 is None:
+            raise ValueError("'preset' only applies to lv2 plugins")
         return self
 
     @property

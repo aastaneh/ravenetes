@@ -22,3 +22,9 @@
     a pset:Preset ;
     lv2:appliesTo <urn:r7s:test:amp> ;
     rdfs:seeAlso <broken-preset.ttl> .
+
+<urn:r7s:test:amp#clean>
+    a pset:Preset ;
+    lv2:appliesTo <urn:r7s:test:amp> ;
+    rdfs:label "Clean" ;
+    rdfs:seeAlso <amp-presets.ttl> .

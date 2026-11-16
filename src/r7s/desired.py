@@ -27,14 +27,18 @@ class DesiredPlugin:
     params: dict[str, float]  # every control input: spec value or plugin default
     explicit: set[str] = field(default_factory=set)  # symbols set in the Rig
     plugin: Plugin | None = None
+    # What the plugin holds right after launch: preset values over defaults.
+    baseline: dict[str, float] = field(default_factory=dict)
+    preset_label: str | None = None
     cc: dict[str, ParamMapping] = field(default_factory=dict)  # symbol -> CC mapping
 
     def launch_params(self) -> dict[str, float]:
-        """Values to pass with -c: explicit ones and anything not at default."""
+        """Values to pass with -c: explicit ones and anything that differs from
+        what the plugin will hold anyway (its defaults, or its preset)."""
         out = {}
-        defaults = {p.symbol: p.default for p in self.plugin.ports} if self.plugin else {}
         for sym, v in self.params.items():
-            if sym in self.explicit or defaults.get(sym) is None or abs(defaults[sym] - v) > 1e-9:
+            base = self.baseline.get(sym)
+            if sym in self.explicit or base is None or abs(base - v) > 1e-9:
                 out[sym] = v
         return out
 
@@ -119,6 +123,15 @@ def compute_desired(
         params: dict[str, float] = {
             q.symbol: q.default for q in plugin.ports if q.is_control_input and q.default is not None
         }
+        preset = None
+        if p.preset:
+            preset, why = world.find_preset(p.lv2, p.preset)
+            if preset is None or preset.error:
+                desired.errors.append(f"{p.id}: {why or preset.error}")
+                continue
+            controls = {q.symbol for q in plugin.ports if q.is_control_input}
+            params.update({s: v for s, v in preset.port_values.items() if s in controls})
+        baseline = dict(params)
         explicit = set()
         cc = {}
         for sym, v in p.parameters.items():
@@ -132,8 +145,15 @@ def compute_desired(
                 params[sym] = f
                 explicit.add(sym)
         # `ui` is accepted but not acted on in v1, so toggling it never restarts a plugin.
-        spec = InstanceSpec(id=p.id, uri=p.lv2, bundle=p.bundle)
-        desired.plugins[p.id] = DesiredPlugin(spec, params, explicit, plugin, cc)
+        spec = InstanceSpec(
+            id=p.id, uri=p.lv2, bundle=p.bundle,
+            preset_path=preset.path if preset else None,
+            preset_uri=preset.uri if preset and not preset.path else None,
+        )
+        desired.plugins[p.id] = DesiredPlugin(
+            spec=spec, params=params, explicit=explicit, plugin=plugin, cc=cc, baseline=baseline,
+            preset_label=(preset.label or preset.uri) if preset else None,
+        )
 
     inline_cache: dict[str, DeviceResolution] = {}
 

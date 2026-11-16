@@ -14,6 +14,7 @@ class FakeInstance:
         self.backend = backend
         self.spec = spec
         self.launch_params = dict(params)
+        self.target = spec.preset_path or spec.uri
         self.params = dict(params)
         self.sets: list[tuple[str, float]] = []
         self._rc: int | None = None

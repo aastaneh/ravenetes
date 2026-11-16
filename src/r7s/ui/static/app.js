@@ -423,7 +423,7 @@ function renderPanel() {
   const parts = [];
   if (n.kind === "plugin") {
     parts.push(kv([
-      ["Plugin", n.title], ["URI", n.uri], ["Category", n.category],
+      ["Plugin", n.title], ["URI", n.uri], ["Category", n.category], ["Preset", n.preset],
       ["State", n.state, n.state === "CrashLoop" ? "err" : null], ["PID", n.pid],
       ["Uptime", ago(n.uptime)], ["Restarts", n.restarts || null],
       ["Last exit", n.lastExit], ["Error", n.lastError, "err"],

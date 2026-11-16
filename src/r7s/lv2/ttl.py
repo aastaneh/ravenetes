@@ -12,12 +12,13 @@ import json
 import logging
 import os
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from rdflib import RDF, RDFS, Graph, Literal, Namespace, URIRef
 
-from .model import Plugin, Port, PortType, ScalePoint
+from .model import Plugin, Port, PortType, Preset, ScalePoint
 
 log = logging.getLogger(__name__)
 
@@ -29,8 +30,9 @@ UNITS = Namespace("http://lv2plug.in/ns/extensions/units#")
 UI = Namespace("http://lv2plug.in/ns/extensions/ui#")
 DOAP = Namespace("http://usefulinc.com/ns/doap#")
 PPROPS = Namespace("http://lv2plug.in/ns/ext/port-props#")
+PSET = Namespace("http://lv2plug.in/ns/ext/presets#")
 
-CACHE_VERSION = 1
+CACHE_VERSION = 2  # 2: bundles cache presets as well as plugins
 
 UNIT_LABELS = {
     "db": "dB",
@@ -175,8 +177,59 @@ def bundle_fingerprint(bundle: Path) -> str:
     return h.hexdigest()[:32]
 
 
+@dataclass
+class BundleScan:
+    plugins: list[Plugin] = field(default_factory=list)
+    presets: list[Preset] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {"plugins": [p.to_dict() for p in self.plugins], "presets": [p.to_dict() for p in self.presets]}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> BundleScan:
+        return cls([Plugin.from_dict(p) for p in d["plugins"]], [Preset.from_dict(p) for p in d["presets"]])
+
+
+def _presets(bundle: Path, manifest_graph: Graph) -> list[Preset]:
+    """Presets declared in a manifest. Each preset's data file is parsed on
+    its own, so one broken preset file can't break the bundle."""
+    out = []
+    for uri in sorted({s for s in manifest_graph.subjects(RDF.type, PSET.Preset) if isinstance(s, URIRef)}):
+        applies = manifest_graph.value(uri, LV2.appliesTo)
+        if applies is None:
+            continue
+        g = Graph()
+        error = None
+        for see in manifest_graph.objects(uri, RDFS.seeAlso):
+            path = _file_path(see)
+            if path is None:
+                continue
+            try:
+                g.parse(path, format="turtle")
+            except Exception as e:  # missing or malformed preset data
+                error = f"{path.name}: {e}".splitlines()[0][:200]
+        label = manifest_graph.value(uri, RDFS.label) or g.value(uri, RDFS.label)
+        values = {}
+        for node in g.objects(uri, LV2.port):
+            sym, val = g.value(node, LV2.symbol), _num(g.value(node, PSET.value))
+            if sym is not None and val is not None:
+                values[str(sym)] = val
+        file_path = _file_path(uri) if "#" not in str(uri) else None
+        out.append(Preset(
+            uri=str(uri), applies_to=str(applies), label=str(label) if label is not None else None,
+            bundle=str(bundle), path=str(file_path) if file_path and file_path.is_file() else None,
+            port_values=values, error=error,
+        ))
+    return out
+
+
 def parse_bundle(bundle: Path) -> list[Plugin]:
     """Parse one *.lv2 bundle directory into Plugin records."""
+    return scan_bundle(bundle).plugins
+
+
+def scan_bundle(bundle: Path) -> BundleScan:
+    """Plugins and presets declared in one *.lv2 bundle directory."""
     bundle = bundle.resolve()
     manifest = bundle / "manifest.ttl"
     if not manifest.is_file():
@@ -235,7 +288,7 @@ def parse_bundle(bundle: Path) -> list[Plugin]:
                 ports=ports,
             )
         )
-    return plugins
+    return BundleScan(plugins, _presets(bundle, g))
 
 
 def default_cache_dir() -> Path:
@@ -245,25 +298,24 @@ def default_cache_dir() -> Path:
 
 def load_bundle(
     bundle: Path, cache_dir: Path | None = None, on_miss: Callable[[Path], None] | None = None
-) -> list[Plugin]:
-    """parse_bundle with an on-disk JSON cache keyed by TTL mtimes."""
+) -> BundleScan:
+    """scan_bundle with an on-disk JSON cache keyed by TTL mtimes."""
     if cache_dir is None:
-        return parse_bundle(bundle)
+        return scan_bundle(bundle)
     key = bundle_fingerprint(bundle)
     cache_file = cache_dir / f"{key}.json"
     try:
-        data = json.loads(cache_file.read_text())
-        return [Plugin.from_dict(d) for d in data]
+        return BundleScan.from_dict(json.loads(cache_file.read_text()))
     except (OSError, ValueError, KeyError, TypeError):
         pass
     if on_miss is not None:
         on_miss(bundle)
-    plugins = parse_bundle(bundle)
+    scan = scan_bundle(bundle)
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
         tmp = cache_file.with_suffix(".tmp")
-        tmp.write_text(json.dumps([p.to_dict() for p in plugins]))
+        tmp.write_text(json.dumps(scan.to_dict()))
         tmp.replace(cache_file)
     except OSError as e:
         log.debug("could not write cache %s: %s", cache_file, e)
-    return plugins
+    return scan

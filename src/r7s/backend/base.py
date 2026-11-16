@@ -20,6 +20,10 @@ class InstanceSpec:
     uri: str
     bundle: str | None = None
     ui: bool = False
+    # Preset to restore. A file-backed preset is loaded at launch (jalv reads
+    # the file fully); a #fragment preset is applied over stdin after launch.
+    preset_path: str | None = None
+    preset_uri: str | None = None
 
     @property
     def client(self) -> str:

@@ -47,6 +47,29 @@ class Port:
 
 
 @dataclass
+class Preset:
+    """An LV2 preset (pset:Preset): saved control values plus plugin state."""
+
+    uri: str
+    applies_to: str
+    label: str | None = None
+    bundle: str = ""
+    # The file holding this preset's data when the preset *is* that file
+    # (jalv/host-saved presets). jalv loads it fully when given the path.
+    # None for presets that share a file (URIs with a #fragment).
+    path: str | None = None
+    port_values: dict[str, float] = field(default_factory=dict)
+    error: str | None = None  # data file unreadable
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> Preset:
+        return cls(**{**d, "port_values": dict(d.get("port_values") or {})})
+
+
+@dataclass
 class Plugin:
     uri: str
     name: str

@@ -47,13 +47,15 @@ def test_cache_roundtrip(tmp_path):
     first = load_bundle(BUNDLE, tmp_path, on_miss=misses.append)
     second = load_bundle(BUNDLE, tmp_path, on_miss=misses.append)
     assert len(misses) == 1
-    assert [p.to_dict() for p in first] == [p.to_dict() for p in second]
-    assert Plugin.from_dict(first[0].to_dict()) == first[0]
+    assert first.to_dict() == second.to_dict()
+    assert Plugin.from_dict(first.plugins[0].to_dict()) == first.plugins[0]
+    assert [p.uri for p in second.presets] == [p.uri for p in first.presets] and second.presets
 
 
 def test_find_bundles_accepts_bundle_or_parent_dir():
-    assert find_bundles([LV2_DIR]) == [BUNDLE.resolve()]
-    assert find_bundles([BUNDLE, LV2_DIR, "/nonexistent"]) == [BUNDLE.resolve()]
+    preset_bundle = (LV2_DIR / "r7s-test-amp_crunch.preset.lv2").resolve()
+    assert find_bundles([LV2_DIR]) == [preset_bundle, BUNDLE.resolve()]  # sorted by name
+    assert find_bundles([BUNDLE, LV2_DIR, "/nonexistent"]) == [BUNDLE.resolve(), preset_bundle]
 
 
 def test_world_search_and_category(world: PluginWorld):

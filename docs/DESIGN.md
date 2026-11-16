@@ -199,6 +199,25 @@ spec:
 - **`bundle:`** adds one local LV2 bundle to discovery for this plugin, so a
   rig repo can ship its own plugins. It is resolved relative to the file that
   declares it.
+- **`preset:`** restores an LV2 preset (by label or URI) when the plugin
+  starts. Use it for state that isn't a simple control: drum kits, sample
+  paths, IRs, JUCE plugin state. The workflow is to pick the settings once in
+  the plugin's own window (`pw-jack jalv.gtk3 <uri>`), save a preset to
+  `~/.lv2`, and reference it.
+  - **Lookup:** `plugins inspect` lists presets. Labels match exactly, then
+    case-insensitively; ambiguous labels must use the URI.
+  - **Values:** the preset's control values become the parameter baseline,
+    and values in `parameters` override them.
+  - **Restart:** changing `preset:` restarts only that plugin.
+  - **How it's loaded:**
+    - A preset that *is* its own file (host-saved, e.g. jalv's) is passed to
+      jalv as a file **path**, so its whole state is restored before audio
+      starts.
+    - A preset sharing a file (URI with `#fragment`) is applied with jalv's
+      console `preset` command after launch, then r7s re-sends the YAML
+      values.
+  - **Why a path:** given a preset URI on its command line, jalv 1.8 restores
+    an empty state (third_party/jalv/UPSTREAM.md).
 - **Parameters** are addressed by LV2 port symbol and given in the plugin's
   own units. A value is a number, a bool (for toggled ports), or a scale-point
   label (for enumerations).
@@ -728,3 +747,4 @@ offline Pi at a gig.
 | Web UI assets | Vanilla JS + SVG, own layered layout, no CDN (works offline) |
 | Hotplug | Kernel uevents via netlink, plus re-reads at +0.5/2/5s |
 | Native plugin windows | Not in v1; jalv can't show one and stay controllable. Carla backend (v2) |
+| Non-control plugin state | `preset:` per plugin (label or URI); file presets launched by path |

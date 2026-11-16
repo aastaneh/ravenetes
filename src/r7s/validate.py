@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import difflib
 import math
+import re
 import os
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -23,6 +24,8 @@ from .schema import SUPPORTED_FORMATS, Backend, Display, ParamMapping, Rig, para
 
 SECTIONS = ("audio", "midi")
 EPS = 1e-6
+# jalv's console parses `preset URI` with sscanf("%1023[a-zA-Z0-9_:/-.#]").
+PRESET_URI_RE = re.compile(r"^[A-Za-z0-9_:/\-.#]{1,1023}$")
 
 
 @dataclass
@@ -317,6 +320,15 @@ def _check_rig_env(r: Loaded, world: PluginWorld) -> list[Diagnostic]:
             )
             continue
         resolved[p.id] = plugin
+        if p.preset:
+            preset, why = world.find_preset(p.lv2, p.preset)
+            if preset is None:
+                out.append(_d(r, "error", why, (*path, "preset")))
+            elif preset.error:
+                out.append(_d(r, "error", f"preset {p.preset!r} can't be read: {preset.error}", (*path, "preset")))
+            elif preset.path is None and not PRESET_URI_RE.match(preset.uri):
+                out.append(_d(r, "error", f"preset URI {preset.uri!r} has characters jalv's console can't take",
+                              (*path, "preset")))
         for sym, v in p.parameters.items():
             out.extend(_check_param(r, (*path, "parameters", sym), plugin, sym, v))
 

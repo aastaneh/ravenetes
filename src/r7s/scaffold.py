@@ -93,7 +93,7 @@ def scaffold_dict(plugin: Plugin, plugin_id: str | None = None) -> dict:
     }
 
 
-def scaffold_yaml(plugin: Plugin, plugin_id: str | None = None, indent: int = 0) -> str:
+def scaffold_yaml(plugin: Plugin, plugin_id: str | None = None, indent: int = 0, presets=()) -> str:
     """A `- id: ...` list item for spec.plugins, with ranges as comments."""
     pad = " " * indent
     pid = plugin_id or slug(plugin.name)
@@ -102,6 +102,10 @@ def scaffold_yaml(plugin: Plugin, plugin_id: str | None = None, indent: int = 0)
         f"{pad}- id: {pid}",
         f"{pad}  lv2: {json.dumps(plugin.uri)}",
     ]
+    usable = [p for p in presets if not p.error]
+    if usable:
+        names = ", ".join(repr(p.label or p.uri) for p in usable[:6]) + (" …" if len(usable) > 6 else "")
+        lines.append(f"{pad}  # preset: {usable[0].label or usable[0].uri!r}   # available: {names}")
     if plugin.has_ui:
         lines.append(f"{pad}  # ui: false              # has a native UI ({', '.join(plugin.ui_types)})")
     controls = [p for p in plugin.ports if p.is_control_input]

@@ -113,3 +113,32 @@ Seen with 1.8.0 + our patches, ZamVerb (DPF UI with `ui:showInterface`):
 These are recorded but not root-caused. Reproduce with
 `jalv -s urn:zamaudio:ZamVerb`, type `controls` (no output), then close the
 window and send SIGTERM.
+
+---
+
+## Bug 4: a preset URI on the command line restores an empty state
+
+**Component:** `src/jalv.c`, `open_plugin_state()`, URI branch
+
+**What happens:** given a preset URI as `PLUGIN_STATE`, jalv calls
+`lilv_state_new_from_world()` without first calling
+`lilv_world_load_resource()` on that URI. Presets saved by hosts (jalv's own
+included) keep their data in the file the manifest points to with
+`rdfs:seeAlso`; only the manifest is loaded at startup. So the state is
+built from the manifest alone: the right plugin, but no port values and no
+`state:state`. The plugin starts as if no preset were given. The console's
+`preset URI` command does call `lilv_world_load_resource()` first, which is
+why it works.
+
+**Repro** (any plugin whose state matters, e.g. drumlabooh with a kit):
+
+```sh
+jalv.gtk3 <plugin-uri>              # pick a kit, save preset "kit"
+jalv file:///home/you/.lv2/<plugin>_kit.preset.lv2/kit.ttl   # silent: no kit
+jalv /home/you/.lv2/<plugin>_kit.preset.lv2/kit.ttl          # works (path branch)
+```
+
+**Fix:** call `lilv_world_load_resource(jalv->world, state_uri)` before
+`lilv_state_new_from_world()` in the URI branch.
+
+**r7s workaround:** file-backed presets are passed as paths.

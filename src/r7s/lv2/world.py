@@ -10,7 +10,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .model import Plugin
+from .model import Plugin, Preset
 from .ttl import BundleError, default_cache_dir, load_bundle
 
 log = logging.getLogger(__name__)
@@ -68,6 +68,7 @@ def find_bundles(paths: Iterable[str | Path]) -> list[Path]:
 class PluginWorld:
     paths: list[str]
     plugins: dict[str, Plugin] = field(default_factory=dict)
+    presets: dict[str, Preset] = field(default_factory=dict)  # by preset URI
     errors: list[str] = field(default_factory=list)
 
     @classmethod
@@ -91,13 +92,15 @@ class PluginWorld:
         world = cls(paths=paths)
         for bundle in find_bundles([*extra_bundles, *paths]):
             try:
-                found = load_bundle(bundle, cache_dir, on_miss)
+                scan = load_bundle(bundle, cache_dir, on_miss)
             except BundleError as e:
                 world.errors.append(str(e))
                 log.warning("%s", e)
                 continue
-            for p in found:
+            for p in scan.plugins:
                 world.plugins.setdefault(p.uri, p)
+            for pr in scan.presets:
+                world.presets.setdefault(pr.uri, pr)
         return world
 
     def get(self, uri: str) -> Plugin | None:
@@ -137,6 +140,33 @@ class PluginWorld:
                 scored.append((ratio * 0.9, p))
         scored.sort(key=lambda s: (-s[0], s[1].name.lower()))
         return [p for _, p in scored]
+
+    def presets_for(self, plugin_uri: str) -> list[Preset]:
+        out = [p for p in self.presets.values() if p.applies_to == plugin_uri]
+        # Labelled presets first: they're the ones people pick by name.
+        return sorted(out, key=lambda p: (p.label is None, (p.label or "").lower(), p.uri))
+
+    def find_preset(self, plugin_uri: str, ref: str) -> tuple[Preset | None, str | None]:
+        """A preset of this plugin by URI or label: (preset, None) or (None, why)."""
+        mine = self.presets_for(plugin_uri)
+        hit = self.presets.get(ref)
+        if hit is not None:
+            if hit.applies_to != plugin_uri:
+                return None, f"preset {ref!r} belongs to {hit.applies_to}, not {plugin_uri}"
+            return hit, None
+        for match in (lambda p: p.label == ref, lambda p: (p.label or "").casefold() == ref.casefold()):
+            found = [p for p in mine if match(p)]
+            if len(found) == 1:
+                return found[0], None
+            if len(found) > 1:
+                uris = ", ".join(p.uri for p in found)
+                return None, f"{len(found)} presets are labelled {ref!r}; use the URI: {uris}"
+        if not mine:
+            return None, f"no presets found for {plugin_uri} in the plugin paths"
+        names = ", ".join(repr(p.label or p.uri) for p in mine[:10])
+        close = difflib.get_close_matches(ref, [p.label for p in mine if p.label], n=1, cutoff=0.6)
+        hint = f"; did you mean {close[0]!r}?" if close else f"; available: {names}"
+        return None, f"no preset {ref!r} for this plugin{hint}"
 
     def suggest(self, uri: str, n: int = 3) -> list[str]:
         return difflib.get_close_matches(uri, list(self.plugins), n=n, cutoff=0.6)

@@ -63,7 +63,10 @@ class JalvInstance:
         # Never "-s": with a native UI shown, console jalv stops reading
         # stdin (no live parameters, CC or quit) and segfaults on SIGTERM.
         # Native windows are deferred to the Carla backend (docs/DESIGN.md).
-        args.append(spec.uri)
+        # A file-backed preset is given as a *path*: jalv then reads the whole
+        # file. Given the URI, jalv 1.8 builds the state without loading the
+        # preset's data file and restores nothing (third_party/jalv/UPSTREAM.md).
+        args.append(spec.preset_path or spec.uri)
         if (setpriv := shutil.which("setpriv")) is not None:
             # Die with r7sd even if it is SIGKILLed (stdin EOF also does it
             # for the patched jalv; this covers other builds).
@@ -84,6 +87,12 @@ class JalvInstance:
             raise BackendError(f"cannot start jalv: {e}") from e
         self._reader = threading.Thread(target=self._read, name=f"jalv-out-{spec.id}", daemon=True)
         self._reader.start()
+        if spec.preset_uri:
+            # Shared-file (#fragment) preset: the console command loads its
+            # data properly. It also resets controls, so re-send ours after.
+            self._send(f"preset {spec.preset_uri}")
+            for sym, val in params.items():
+                self._send(f"set {sym} {_fmt(val)}")
         log.info("started %s (pid %s): %s", spec.client, self._proc.pid, spec.uri)
 
     def _read(self) -> None:

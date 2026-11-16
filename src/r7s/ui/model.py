@@ -109,6 +109,7 @@ def build_graph(reconciler, store, rig_name: str | None = None) -> dict:
             "id": f"p:{p.id}", "kind": "plugin", "label": p.id,
             "title": plugin.name if plugin else (p.lv2 or p.vst3 or p.clap),
             "uri": p.lv2 or p.vst3 or p.clap, "category": plugin.category if plugin else None,
+            "preset": (want.preset_label if want else None) or p.preset,
             "installed": plugin is not None,
             "state": st.get("state") or ("Inactive" if not is_active else "Waiting"),
             "pid": st.get("pid"), "restarts": st.get("restarts", 0),

@@ -1,0 +1,11 @@
+@prefix lv2: <http://lv2plug.in/ns/lv2core#> .
+@prefix pset: <http://lv2plug.in/ns/ext/presets#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix state: <http://lv2plug.in/ns/ext/state#> .
+
+<>
+	a pset:Preset ;
+	lv2:appliesTo <urn:r7s:test:amp> ;
+	rdfs:label "Crunch Rhythm" ;
+	lv2:port [ lv2:symbol "gain" ; pset:value 9.0 ] , [ lv2:symbol "mode" ; pset:value 1.0 ] ;
+	state:state [ <urn:r7s:test:amp#kit> "/some/samples" ] .
